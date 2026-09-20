@@ -1,1 +1,6 @@
 __pycache__/
+test_data/
+venv/
+output/
+spool/
+.pytest_cache/

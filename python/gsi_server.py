@@ -1,51 +1,98 @@
+"""Lokalny serwer Game State Integration: filtruje telemetrie CS2 i wysyla ja do Event Hubs."""
+
+import logging
+from collections import defaultdict
+from contextlib import asynccontextmanager
+
 import uvicorn
 from fastapi import FastAPI, Request
-from azure.identity import DefaultAzureCredential
-from azure.keyvault.secrets import SecretClient
-from azure.eventhub import EventHubProducerClient, EventData
-import json
 
-from config import KV_URI, EVENT_HUB_NAME, EVH_CONN_STRING_SECRET
+import config
+from gsi.envelope import EnvelopeFactory
+from gsi.match_state import MatchTracker
+from gsi.sender import EventHubSender, EventSink, FileSink
 
-#AZURE CREDENTIAL
-credential = DefaultAzureCredential()
-secret_client = SecretClient(vault_url=KV_URI, credential=credential)
-conn_string = secret_client.get_secret(EVH_CONN_STRING_SECRET).value
-
-#EVENT HUB
-producer = EventHubProducerClient.from_connection_string(
-    conn_str=conn_string,
-    eventhub_name=EVENT_HUB_NAME
+logging.basicConfig(
+    level=getattr(logging, config.LOG_LEVEL.upper(), logging.INFO),
+    format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
 )
+log = logging.getLogger("gsi")
 
-#FAST API
-app = FastAPI()
 
-data_packets_sent = 0
-data_packets_lost = 0
+def build_sink() -> EventSink:
+    if not config.SEND_TO_EVENTHUB:
+        return FileSink(config.OFFLINE_OUTPUT_PATH)
+
+    from azure.identity import DefaultAzureCredential
+    from azure.keyvault.secrets import SecretClient
+
+    credential = DefaultAzureCredential()
+    secret_client = SecretClient(vault_url=config.KV_URI, credential=credential)
+    conn_string = secret_client.get_secret(config.EVH_CONN_STRING_SECRET).value
+    return EventHubSender(
+        conn_string=conn_string,
+        eventhub_name=config.EVENT_HUB_NAME,
+        max_batch_events=config.MAX_BATCH_EVENTS,
+        flush_interval_s=config.FLUSH_INTERVAL_S,
+        queue_maxsize=config.QUEUE_MAXSIZE,
+        max_retries=config.MAX_RETRIES,
+        spool_path=config.SPOOL_PATH,
+    )
+
+
+tracker = MatchTracker(idle_timeout_s=config.MATCH_IDLE_TIMEOUT_S)
+envelopes = EnvelopeFactory()
+sink: EventSink = build_sink()
+counters: dict[str, int] = defaultdict(int)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    await sink.start()
+    log.info("Serwer GSI nasluchuje na http://%s:%s", config.HOST, config.PORT)
+    yield
+    for event in tracker.finalize():
+        sink.submit(envelopes.wrap(event))
+    await sink.stop()
+    log.info("Podsumowanie: %s", dict(counters))
+
+
+app = FastAPI(lifespan=lifespan)
+
 
 @app.post("/")
 async def gsi_endpoint(request: Request):
+    # Handler musi wrocic natychmiast: GSI czeka na odpowiedz blokujac watek gry.
     try:
-        data = await request.json()
-        
-        if data:
-            event_data_batch = producer.create_batch()
-            event_data_batch.add(EventData(body=json.dumps(data)))
-            producer.send_batch(event_data_batch=event_data_batch)
-            print("Data sent to Event Hub")
+        payload = await request.json()
+    except Exception:  # noqa: BLE001 - heartbeat bez ciala albo uszkodzony JSON
+        counters["invalid"] += 1
+        return {"status": "ignored"}
 
-            data_packets+=1
-            
-    except Exception:
-        data_packets_lost += 1
-        pass
+    counters["received"] += 1
+    try:
+        for event in tracker.process(payload):
+            counters[event.event_type] += 1
+            sink.submit(envelopes.wrap(event))
+    except Exception:  # noqa: BLE001 - blad przetwarzania nie moze zatrzymac gry
+        counters["errors"] += 1
+        log.exception("Nie udalo sie przetworzyc pakietu GSI")
 
-    return {"status": "success"}
+    return {"status": "ok"}
 
-if __name__ == '__main__':
-    print("GSI server is running...")
-    uvicorn.run(app, host="127.0.0.1", port=3000, log_level="warning")
 
-    print(f"Total data packets sent to Event Hub: {data_packets_sent}")
-    print(f"Total data packets lost: {data_packets_lost}")
+@app.get("/health")
+async def health():
+    return {
+        "session_id": envelopes.session_id,
+        "match_id": tracker.match_id,
+        "map": tracker.map_name,
+        "rounds_completed": len(tracker.ended_rounds),
+        "counters": dict(counters),
+        "sink": dict(sink.stats),
+        "queue_size": getattr(sink, "queue_size", 0),
+    }
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host=config.HOST, port=config.PORT, log_level="warning")

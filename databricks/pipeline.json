@@ -1,0 +1,26 @@
+{
+  "name": "cs2_gsi_medallion_dev",
+  "catalog": "cs2_dev",
+  "schema": "bronze",
+  "development": true,
+  "continuous": false,
+  "serverless": true,
+  "photon": true,
+  "configuration": {
+    "cs2.catalog": "cs2_dev",
+    "cs2.eventhub.namespace": "evhcs2tracker",
+    "cs2.eventhub.name": "cs2tracker_evh",
+    "cs2.eventhub.secret_key": "evh-connection-string",
+    "cs2.eventhub.starting_offsets": "earliest",
+    "cs2.secret_scope": "cs2tracker-secrets"
+  },
+  "libraries": [
+    { "file": { "path": "pipelines/bronze/bronze_gsi_events.py" } },
+    { "file": { "path": "pipelines/silver/silver_events_parsed.py" } },
+    { "file": { "path": "pipelines/silver/silver_ticks.py" } },
+    { "file": { "path": "pipelines/silver/silver_round_events.py" } },
+    { "file": { "path": "pipelines/silver/silver_derived_events.py" } },
+    { "file": { "path": "pipelines/gold/gold_dimensions.py" } },
+    { "file": { "path": "pipelines/gold/gold_facts.py" } }
+  ]
+}
