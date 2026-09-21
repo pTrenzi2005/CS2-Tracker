@@ -1,3 +1,15 @@
+# Warstwa Databricks
+
+Dwa niezalezne byty, obydwa opisane jednym Asset Bundlem:
+
+| Co | Czym jest | Kiedy sie wykonuje |
+| --- | --- | --- |
+| [Potok Medallion](#potok-medallion-lakeflow-declarative-pipelines) | Lakeflow Declarative Pipeline | po kazdym meczu |
+| [Dane wsadowe](#dane-wsadowe-mapy-i-bronie) | Job z czterema taskami | raz, potem po patchu Valve |
+
+Lacza sie tymi samymi kluczami surogatowymi (`map_key`, `weapon_key`), ale zadna
+tabela nie ma dwoch wlascicieli.
+
 # Potok Medallion (Lakeflow Declarative Pipelines)
 
 Potok czyta zdarzenia GSI z Azure Event Hubs i przeprowadza je przez Bronze,
@@ -124,3 +136,131 @@ Dlatego liczby i pozycje pochodza z dwoch roznych miejsc:
 Surowy SteamID64 konczy sie na warstwie Silver. W Gold wystepuje wylacznie
 `player_key` (SHA-256) oraz `steamid_masked`, zgodnie z sekcja o governance w
 glownym [README](../README.md).
+
+# Dane wsadowe: mapy i bronie
+
+Job `cs2_reference_data_ingest` sciaga statyczne metadane gry i przeprowadza je
+przez te same trzy warstwy co telemetrie. Kod siedzi w [batch/](batch), definicja
+w [resources/cs2_reference_data.job.yml](resources/cs2_reference_data.job.yml).
+
+| Zrodlo | Co z niego bierzemy |
+| --- | --- |
+| [MurkyYT/cs2-map-icons](https://github.com/MurkyYT/cs2-map-icons) | `available.json` (transformacja radaru, poziomy wysokosci), pliki overview (strefy plantu, respawny), PNG ikon i radarow |
+| [Kaggle: cs2-weapon-spreadsheet](https://www.kaggle.com/datasets/billpureskillgg/cs2-weapon-spreadsheet) | arkusz `Raw Values`: obrazenia, cena, nagroda, kadencja, przebicie pancerza, rozrzut, odrzut |
+
+## Dlaczego Job, a nie drugi potok
+
+Potok deklaratywny oplaca sie tam, gdzie liczy sie przyrostowosc. Tutaj zrodlem
+sa pliki HTTP, a wynik to snapshot nadpisywany w calosci - nie ma czego
+inkrementalizowac. Do tego pobieranie z sieci i tak musialoby byc taskiem obok
+potoku, wiec potok dokladalby drugi paradygmat i kilka minut startu na 100 kB
+danych. Na koniec sprawa wlasnosci tabel: tabela zarzadzana przez potok nalezy
+do tego potoku i znika razem z nim, a dane referencyjne maja przetrwac kazde
+przebudowanie warstwy strumieniowej.
+
+Rzeczy, ktore w Lakeflow dostaje sie za darmo, sa tu odtworzone recznie:
+
+- **Expectations** - funkcja `expect_all_or_drop` w [silver_reference_data.py](batch/silver_reference_data.py)
+  stosuje te same reguly co dekorator z potoku (warunek dajacy NULL to naruszenie)
+  i wypisuje licznik odrzuconych rekordow do logu taska.
+- **Kontrola spojnosci** - ostatnia komorka [gold_reference_data.py](batch/gold_reference_data.py)
+  sprawdza unikalnosc kluczy, integralnosc mapa -> poziom -> strefa i kompletnosc
+  transformacji radaru. Niespojnosc wywraca przebieg Joba.
+
+## Zadna tabela nie ma dwoch wlascicieli
+
+`gold.dim_map` i `gold.dim_weapon` naleza do potoku GSI i opisuja to, co
+faktycznie pojawilo sie w telemetrii - razem z nozami, granatami i C4, ktorych w
+arkuszu Kaggle nie ma. Job ich **nie dotyka**. Zamiast tego produkuje wymiary o
+tych samych kluczach surogatowych:
+
+```sql
+SELECT k.weapon_name, count(*) AS zabojstwa, s.damage, s.price_usd
+FROM   cs2_dev.gold.fact_kills      k
+JOIN   cs2_dev.gold.dim_weapon_spec s USING (weapon_key)
+GROUP  BY ALL
+```
+
+`weapon_key` to `xxhash64(weapon_name)` po obu stronach - Job dokleja do nazwy z
+arkusza przedrostek `weapon_`, bo tak nazywa bronie GSI. `map_key` to
+`xxhash64(map_name)`, identycznie jak w tabelach faktow.
+
+## Tabele
+
+| Warstwa | Tabela | Ziarno | Tryb zapisu |
+| --- | --- | --- | --- |
+| bronze | `map_icons_raw` | plik tekstowy (manifest, overview) | append |
+| bronze | `weapon_spreadsheet_raw` | linia arkusza | append |
+| bronze | `map_assets_raw` | obraz w Volume (metadane) | append |
+| silver | `map_reference` | mapa | overwrite |
+| silver | `map_level` | mapa x poziom radaru | overwrite |
+| silver | `map_zone` | mapa x strefa | overwrite |
+| silver | `weapon_attributes` | bron | overwrite |
+| gold | `dim_map_reference` | mapa | overwrite |
+| gold | `dim_map_level` | mapa x poziom radaru | overwrite |
+| gold | `dim_map_zone` | mapa x strefa | overwrite |
+| gold | `dim_weapon_spec` | bron | overwrite |
+
+Bronze jest append-only i kazdy wiersz niesie `ingest_run_id`, wiec kolejne
+przebiegi odkladaja sie jako historia snapshotow. Silver i Gold opisuja zawsze
+najswiezszy `ingest_run_id`, dlatego ponowne uruchomienie Joba daje ten sam
+wynik - jest idempotentne mimo rosnacego Bronze.
+
+## Po co to wszystko: transformacja na radar
+
+Bez `dim_map_reference` pozycje z `fact_kills` to gole liczby. Z nia zamieniaja
+sie w piksel obrazu radaru:
+
+```sql
+SELECT (k.pos_x - m.radar_pos_x) / m.radar_scale AS pixel_x,
+       (m.radar_pos_y - k.pos_y) / m.radar_scale AS pixel_y,
+       l.radar_volume_path
+FROM   cs2_dev.gold.fact_kills         k
+JOIN   cs2_dev.gold.dim_map_reference  m USING (map_key)
+JOIN   cs2_dev.gold.dim_map_level      l
+       ON  l.map_key = k.map_key
+       AND k.pos_z >= l.altitude_min AND k.pos_z < l.altitude_max
+```
+
+Os Y jest odwrocona, bo radar liczy piksele od gornej krawedzi. `dim_map_level`
+wybiera wlasciwy obraz tla dla wysokosci - na de_nuke rozdziela to poziom gorny
+od dolnego przy granicy -495. Przedzial jest domkniety tylko z dolu, bo sasiednie
+poziomy dziela ta granice.
+
+`dim_map_zone` daje punkty odniesienia (`bombsite_a`, `bombsite_b`, `ct_spawn`,
+`t_spawn`) juz przeliczone na wspolrzedne swiata, wiec odleglosc od bombsite'a
+liczy sie wprost w SQL-u, bez wracania do ulamkow obrazu.
+
+## Uruchomienie
+
+```bash
+databricks bundle deploy -t dev
+databricks bundle run    cs2_reference_data -t dev
+```
+
+Wymaga Volume `bronze.raw` z notebooka [01_architecture_setup.ipynb](01_architecture_setup.ipynb).
+Pliki laduja w `/Volumes/<katalog>/bronze/raw/reference/`. Kolejnosc wzgledem
+potoku GSI jest dowolna - Job nie czyta zadnej tabeli potoku poza koncowym,
+nieblokujacym raportem pokrycia.
+
+Dataset Kaggle schodzi bez logowania. Gdyby przestal, wystarczy dolozyc do
+secret scope klucze `kaggle-username` i `kaggle-key` - kod uzyje ich sam.
+
+## Stan weryfikacji danych wsadowych
+
+Logika parsowania zostala przepuszczona przez wszystkie 50 map z repozytorium i
+pelny arkusz broni (poza Databricks, w czystym Pythonie - te same regexpy, te
+same reguly dopasowania). Wynik: 23 mapy maja dane radaru, 28 poziomow wysokosci,
+56 stref na 17 mapach, 34 bronie w szesciu kategoriach, komplet cen i obrazen.
+
+Sprawdzenie wykrylo jedna realna pulapke: **nazwa pliku radaru nie ma jednego
+formatu**. Poza `<mapa>_radar_psd.png` wystepuja `_radar_tga.png`, `_radar.png`,
+kopie z hashem w nazwie i warianty `_spectate`. Dopasowanie po stalym przyrostku
+gubilo 8 z 28 poziomow, w tym cala mape `de_dust`. Teraz porownanie idzie po
+nazwie z odcietym przyrostkiem formatu.
+
+Druga obserwacja, ktora nie jest bledem: mapy spolecznosciowe wygenerowane
+RadGenem (`de_poseidon`, `de_boulder`, `cs_shelter`, `de_debris`, `de_eldorado`,
+`de_fachwerk`) nie maja w pliku overview ani klucza `material`, ani stref - stad
+`radar_material IS NULL` i brak wierszy w `dim_map_zone`. Mapy bez bombsite'ow
+(`ar_`, `cs_`) maja tylko respawny.

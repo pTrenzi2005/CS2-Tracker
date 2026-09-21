@@ -1,0 +1,73 @@
+# Dane wsadowe: mapy z repozytorium cs2-map-icons i parametry broni z Kaggle.
+#
+# To Job, a nie potok Lakeflow, bo zrodlem sa pliki HTTP pobierane jednorazowo, a wynik
+# jest snapshotem nadpisywanym w calosci - nie ma tu nic przyrostowego, co potok mialby
+# zinkrementalizowac. Szczegoly decyzji sa w databricks/README.md.
+#
+#   databricks bundle deploy -t dev
+#   databricks bundle run    cs2_reference_data -t dev
+#
+# Sciezki notebookow sa wzgledne do tego pliku, tak samo jak w definicji potoku.
+
+resources:
+  jobs:
+    cs2_reference_data:
+      name: cs2_reference_data_ingest
+      description: >-
+        Jednorazowa ingestia danych referencyjnych (mapy, radary, parametry broni)
+        przez Bronze, Silver i Gold. Uruchamiac ponownie po patchu Valve.
+      max_concurrent_runs: 1
+
+      # Parametry Joba trafiaja do notebookow jako wartosci widgetow o tych samych nazwach.
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: map_icons_repo
+          default: MurkyYT/cs2-map-icons
+        - name: map_icons_ref
+          default: main
+        - name: kaggle_dataset
+          default: billpureskillgg/cs2-weapon-spreadsheet
+        - name: download_images
+          default: "true"
+        - name: secret_scope
+          default: ${var.secret_scope}
+
+      # Brak sekcji compute oznacza serverless - tak samo jak potok GSI.
+      tasks:
+        - task_key: download
+          description: Pobranie plikow zrodlowych do Volume bronze.raw i zapis manifestu.
+          notebook_task:
+            notebook_path: ../batch/download_reference_data.py
+
+        - task_key: bronze
+          description: Volume -> bronze.map_icons_raw, weapon_spreadsheet_raw, map_assets_raw.
+          depends_on:
+            - task_key: download
+          notebook_task:
+            notebook_path: ../batch/bronze_reference_data.py
+
+        - task_key: silver
+          description: Parsowanie manifestu map, plikow overview i arkusza broni.
+          depends_on:
+            - task_key: bronze
+          notebook_task:
+            notebook_path: ../batch/silver_reference_data.py
+
+        - task_key: gold
+          description: Wymiary danych wsadowych i kontrola spojnosci kluczy.
+          depends_on:
+            - task_key: silver
+          notebook_task:
+            notebook_path: ../batch/gold_reference_data.py
+
+      queue:
+        enabled: true
+
+      # Brak harmonogramu jest celowy: Job uruchamia sie recznie albo z REST API, gdy
+      # Valve zmieni mape lub parametry broni. Zeby odswiezac go cyklicznie, odkomentuj:
+      #
+      # schedule:
+      #   quartz_cron_expression: "0 0 6 ? * MON"
+      #   timezone_id: Europe/Warsaw
+      #   pause_status: UNPAUSED
