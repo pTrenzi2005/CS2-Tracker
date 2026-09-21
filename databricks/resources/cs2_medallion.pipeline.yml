@@ -1,0 +1,40 @@
+# Sciezki w plikach z resources/ sa wzgledne do tego pliku, nie do korzenia
+# bundla - stad ../pipelines/.
+#
+# Pola development i photon sa tu celowo pominiete: pierwsze ustawia tryb
+# targetu (development / production), drugie jest ignorowane przy serverless.
+
+resources:
+  pipelines:
+    cs2_medallion:
+      name: cs2_gsi_medallion
+      catalog: ${var.catalog}
+      # Domyslny schemat dla nazw niekwalifikowanych. Wszystkie tabele w kodzie
+      # uzywaja pelnych nazw catalog.schema.table, wiec publikuja sie do
+      # bronze, silver i gold niezaleznie od tej wartosci.
+      schema: bronze
+      serverless: true
+      continuous: false
+      channel: CURRENT
+      configuration:
+        cs2.catalog: ${var.catalog}
+        cs2.eventhub.namespace: ${var.eventhub_namespace}
+        cs2.eventhub.name: ${var.eventhub_name}
+        cs2.eventhub.secret_key: ${var.secret_key}
+        cs2.eventhub.starting_offsets: ${var.starting_offsets}
+        cs2.secret_scope: ${var.secret_scope}
+      libraries:
+        - file:
+            path: ../pipelines/bronze/bronze_gsi_events.py
+        - file:
+            path: ../pipelines/silver/silver_events_parsed.py
+        - file:
+            path: ../pipelines/silver/silver_ticks.py
+        - file:
+            path: ../pipelines/silver/silver_round_events.py
+        - file:
+            path: ../pipelines/silver/silver_derived_events.py
+        - file:
+            path: ../pipelines/gold/gold_dimensions.py
+        - file:
+            path: ../pipelines/gold/gold_facts.py

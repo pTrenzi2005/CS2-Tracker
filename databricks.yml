@@ -1,0 +1,57 @@
+# Databricks Asset Bundle: potok Bronze -> Silver -> Gold dla telemetrii CS2.
+#
+#   databricks bundle validate -t dev
+#   databricks bundle deploy   -t dev
+#   databricks bundle run      cs2_medallion -t dev
+#
+# Przed pierwszym wdrozeniem podmien ADB_WORKSPACE_URL na adres swojego
+# workspace (Databricks -> prawy gorny rog -> adres z paska przegladarki,
+# postaci https://adb-<id>.<n>.azuredatabricks.net).
+
+bundle:
+  name: cs2-tracker
+
+include:
+  - databricks/resources/*.yml
+
+variables:
+  catalog:
+    description: Katalog Unity Catalog, w ktorym powstaja schematy bronze, silver i gold.
+    default: cs2_dev
+  eventhub_namespace:
+    description: Namespace Azure Event Hubs, bez sufiksu servicebus.windows.net.
+    default: evhcs2tracker
+  eventhub_name:
+    description: Nazwa Event Huba; dla warstwy Bronze jest to nazwa topicu Kafki.
+    default: cs2tracker_evh
+  secret_scope:
+    description: Secret scope Databricks z connection stringiem do Event Hubs.
+    default: cs2tracker-secrets
+  secret_key:
+    description: Klucz w secret scope przechowujacy connection string.
+    default: evh-connection-string
+  starting_offsets:
+    description: Miejsce startu Bronze przy pierwszym uruchomieniu (earliest albo latest).
+    default: earliest
+
+# Klient GSI dziala lokalnie przy grze i nie ma po co trafiac do workspace.
+sync:
+  exclude:
+    - python/**
+    - "**/__pycache__/**"
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://ADB_WORKSPACE_URL.azuredatabricks.net
+
+  prod:
+    mode: production
+    variables:
+      catalog: cs2_prod
+    workspace:
+      host: https://ADB_WORKSPACE_URL.azuredatabricks.net
+      # Tryb production nie moze publikowac do katalogu domowego uzytkownika.
+      root_path: /Shared/.bundle/${bundle.name}/${bundle.target}

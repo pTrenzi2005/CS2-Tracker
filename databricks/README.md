@@ -12,18 +12,33 @@ Silver i Gold az do schematu gwiazdy gotowego pod dashboardy.
 3. **Katalog i schematy Unity Catalog** zalozone notebookiem
    [01_architecture_setup.ipynb](01_architecture_setup.ipynb).
 4. Potok publikuje tabele do trzech schematow naraz (`bronze`, `silver`,
-   `gold`), korzystajac z w pelni kwalifikowanych nazw w dekoratorach.
+   `gold`), korzystajac z w pelni kwalifikowanych nazw w dekoratorach. Wymaga
+   to domyslnego trybu publikacji, czyli pola `schema` zamiast przestarzalego
+   `target` - bundle ustawia je poprawnie.
 
-## Uruchomienie
+## Wdrozenie
+
+Potok jest opisany jako Databricks Asset Bundle: [databricks.yml](../databricks.yml)
+w korzeniu repozytorium plus [resources/cs2_medallion.pipeline.yml](resources/cs2_medallion.pipeline.yml).
 
 ```bash
-databricks pipelines create --json @databricks/pipeline.json
-databricks pipelines start-update --pipeline-id <id>
+# jednorazowo
+pip install databricks-cli        # albo: winget install Databricks.DatabricksCLI
+databricks auth login --host https://<twoj-workspace>.azuredatabricks.net
+
+# przed pierwszym wdrozeniem: podmien ADB_WORKSPACE_URL w databricks.yml
+
+databricks bundle validate -t dev
+databricks bundle deploy   -t dev
+databricks bundle run      cs2_medallion -t dev
 ```
 
-Parametry srodowiska (katalog, namespace Event Hubs, secret scope) siedza w
-sekcji `configuration` w [pipeline.json](pipeline.json) i sa odczytywane w
-kodzie przez `spark.conf.get`, wiec ten sam kod obsluguje DEV i PROD.
+Target `prod` (`-t prod`) publikuje do katalogu `cs2_prod` i wdraza sie do
+`/Shared/.bundle/`, bo tryb production nie moze siedziec w katalogu domowym.
+
+Parametry srodowiska (katalog, namespace Event Hubs, secret scope) sa
+zmiennymi bundla i trafiaja do sekcji `configuration` potoku, skad kod czyta je
+przez `spark.conf.get`. Ten sam kod obsluguje DEV i PROD bez zmian.
 
 ## Tabele
 
@@ -36,6 +51,33 @@ kodzie przez `spark.conf.get`, wiec ten sam kod obsluguje DEV i PROD.
 | silver | `kill_events`, `death_events`, `damage_events`, `round_player_state` | materialized view | zdarzenie wyliczone z przyrostow |
 | gold | `dim_player`, `dim_map`, `dim_weapon`, `dim_round`, `dim_match` | materialized view | wymiar |
 | gold | `fact_player_positions`, `fact_kills`, `fact_deaths`, `fact_damage`, `fact_round_stats`, `agg_match_summary` | materialized view | fakt |
+
+## Stan weryfikacji
+
+Caly potok zostal przepuszczony lokalnie przez Sparka na nagraniu meczu
+wingman 2v2 na de_nuke (1336 zdarzen). Wszystkie 20 tabel buduje sie bez
+bledu, a warstwa Gold zgadza sie z licznikami w grze co do sztuki: 15
+zabojstw, 9 zgonow, 16 rund, 16/16 powodow wygranej, ADR 94,3. Nie jest to
+jednak przebieg na Databricks - operacje czysto strumieniowe
+(`dropDuplicatesWithinWatermark`, czytanie Kafki) byly w tym tescie zastapione
+odpowiednikami wsadowymi.
+
+Trzy rzeczy, ktore ta weryfikacja wykryla i ktore sa juz poprawione:
+
+- **`round_type` bral ekwipunek z pakietu `round_start`.** GSI wysyla go
+  jeszcze w freezetime, przed zakupami, wiec wartosc to zwykle sam noz (200).
+  Szesc rund na szesnascie wychodzilo `unknown`, a runda z pelnym zakupem za
+  3850 byla klasyfikowana jako `eco`. Teraz decyduje `equip_value_max`
+  z tickow, czyli ekwipunek, z ktorym gracz faktycznie gral.
+- **`is_pistol_round` zakladalo na sztywno rundy 0 i 12.** W wingmanie polowa
+  konczy sie po rundzie 7, wiec pistolowka drugiej polowy (runda 8) byla
+  pomijana, a oznaczana byla zwykla runda 12. Teraz pierwsza runda polowy
+  wynika ze zmiany druzyny gracza, co dziala i dla MR12, i dla wingmana.
+- **`final_score_ct` / `final_score_t` bralo tablice wynikow z GSI.** Ta
+  zmienia znaczenie po zmianie stron, a snapshot z ostatniej rundy nie obejmuje
+  jej samej - wychodzilo 8:7 przy szesnastu rozegranych rundach. Kolumny
+  nazywaja sie teraz `rounds_won_ct_side` i `rounds_won_t_side`, licza sie ze
+  zwyciezcow rund i zawsze sumuja do `rounds_played`.
 
 ## Dlaczego zdarzenia pochodne to materialized view
 

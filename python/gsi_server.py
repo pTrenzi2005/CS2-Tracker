@@ -5,13 +5,14 @@ from collections import defaultdict
 from contextlib import asynccontextmanager
 
 import uvicorn
+from azure.identity import DefaultAzureCredential
+from azure.keyvault.secrets import SecretClient
 from fastapi import FastAPI, Request
 
 import config
-from gsi.capture import RawCapture
 from gsi.envelope import EnvelopeFactory
 from gsi.match_state import MatchTracker
-from gsi.sender import EventHubSender, EventSink, FileSink
+from gsi.sender import EventHubSender
 
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL.upper(), logging.INFO),
@@ -20,13 +21,7 @@ logging.basicConfig(
 log = logging.getLogger("gsi")
 
 
-def build_sink() -> EventSink:
-    if not config.SEND_TO_EVENTHUB:
-        return FileSink(config.OFFLINE_OUTPUT_PATH)
-
-    from azure.identity import DefaultAzureCredential
-    from azure.keyvault.secrets import SecretClient
-
+def build_sender() -> EventHubSender:
     credential = DefaultAzureCredential()
     secret_client = SecretClient(vault_url=config.KV_URI, credential=credential)
     conn_string = secret_client.get_secret(config.EVH_CONN_STRING_SECRET).value
@@ -37,29 +32,23 @@ def build_sink() -> EventSink:
         flush_interval_s=config.FLUSH_INTERVAL_S,
         queue_maxsize=config.QUEUE_MAXSIZE,
         max_retries=config.MAX_RETRIES,
-        spool_path=config.SPOOL_PATH,
     )
 
 
 tracker = MatchTracker(idle_timeout_s=config.MATCH_IDLE_TIMEOUT_S)
 envelopes = EnvelopeFactory()
-sink: EventSink = build_sink()
-raw_capture = RawCapture(config.RAW_CAPTURE_PATH) if config.RAW_CAPTURE_PATH else None
+sender = build_sender()
 counters: dict[str, int] = defaultdict(int)
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    await sink.start()
-    if raw_capture is not None:
-        raw_capture.open()
+    await sender.start()
     log.info("Serwer GSI nasluchuje na http://%s:%s", config.HOST, config.PORT)
     yield
     for event in tracker.finalize():
-        sink.submit(envelopes.wrap(event))
-    await sink.stop()
-    if raw_capture is not None:
-        raw_capture.close()
+        sender.submit(envelopes.wrap(event))
+    await sender.stop()
     log.info("Podsumowanie: %s", dict(counters))
 
 
@@ -76,12 +65,10 @@ async def gsi_endpoint(request: Request):
         return {"status": "ignored"}
 
     counters["received"] += 1
-    if raw_capture is not None:
-        raw_capture.write(payload)
     try:
         for event in tracker.process(payload):
             counters[event.event_type] += 1
-            sink.submit(envelopes.wrap(event))
+            sender.submit(envelopes.wrap(event))
     except Exception:  # noqa: BLE001 - blad przetwarzania nie moze zatrzymac gry
         counters["errors"] += 1
         log.exception("Nie udalo sie przetworzyc pakietu GSI")
@@ -97,9 +84,8 @@ async def health():
         "map": tracker.map_name,
         "rounds_completed": len(tracker.ended_rounds),
         "counters": dict(counters),
-        "sink": dict(sink.stats),
-        "queue_size": getattr(sink, "queue_size", 0),
-        "raw_captured": raw_capture.count if raw_capture is not None else None,
+        "sender": dict(sender.stats),
+        "queue_size": sender.queue_size,
     }
 
 

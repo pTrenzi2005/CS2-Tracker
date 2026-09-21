@@ -185,7 +185,6 @@ def gold_fact_round_stats():
         "distance_units",
         "tick_count",
         "min_health",
-        "equip_value_max",
     )
     kills = (
         spark.read.table(KILL_EVENTS)
@@ -271,8 +270,7 @@ def gold_fact_round_stats():
         F.coalesce(time_alive, F.col("round_duration_s")).alias("time_alive_s"),
         F.coalesce(F.col("distance_units"), F.lit(0.0)).alias("distance_units"),
         F.col("money_start").alias("money_start"),
-        F.col("equip_value_start").alias("equip_value_start"),
-        F.col("equip_value_max").alias("equip_value_max"),
+        F.col("equip_value").alias("equip_value"),
         F.coalesce(F.col("tick_count"), F.lit(0)).alias("tick_count"),
     )
 

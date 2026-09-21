@@ -6,6 +6,7 @@ stabilne przy kazdym pelnym przeliczeniu widokow i nie wymagaja sekwencerow.
 
 from pyspark import pipelines as dp
 from pyspark.sql import functions as F
+from pyspark.sql.window import Window
 
 CATALOG = spark.conf.get("cs2.catalog")
 TICKS = f"{CATALOG}.silver.player_ticks"
@@ -115,7 +116,6 @@ def gold_dim_round():
         .agg(
             F.min("client_ts").alias("round_start_ts"),
             F.expr("min_by(player_team, seq)").alias("team_at_start"),
-            F.expr("min_by(equip_value, seq)").alias("equip_value_start"),
             F.expr("min_by(money, seq)").alias("money_start"),
             F.expr("min_by(map_name, seq)").alias("map_name_start"),
             F.expr("min_by(map_mode, seq)").alias("map_mode"),
@@ -138,16 +138,35 @@ def gold_dim_round():
         )
     )
     state = spark.read.table(ROUND_STATE).select(
-        "match_id", "round_number", F.col("player_team").alias("team_from_ticks")
+        "match_id",
+        "round_number",
+        F.col("player_team").alias("team_from_ticks"),
+        F.col("money_start").alias("money_first_tick"),
+        F.col("equip_value_max").alias("equip_value_max"),
     )
 
     player_team = F.coalesce("team_at_start", "team_at_end", "team_from_ticks")
-    equip = F.col("equip_value_start")
+    # GSI wysyla round_start jeszcze w freezetime, czyli przed zakupami - equip
+    # z tego pakietu to zwykle sam noz (200). O typie rundy decyduje pelny
+    # ekwipunek, jaki gracz mial w jej trakcie.
+    equip = F.col("equip_value_max")
+    by_match = Window.partitionBy("match_id").orderBy("round_number")
     return (
         starts.join(ends, ["match_id", "round_number"], "full_outer")
         .join(state, ["match_id", "round_number"], "left")
         .withColumn("player_team", player_team)
         .withColumn("map_name", F.coalesce("map_name_start", "map_name_end"))
+        # Pistolowka to pierwsza runda polowy. Zmiane stron poznajemy po zmianie
+        # druzyny gracza, wiec regula dziala tak samo dla MR12 i dla wingmana,
+        # gdzie polowa konczy sie po rundzie 7, a nie po 11.
+        .withColumn(
+            "is_pistol_round",
+            F.coalesce(
+                (F.col("round_number") == 0)
+                | (F.col("player_team") != F.lag("player_team").over(by_match)),
+                F.lit(False),
+            ),
+        )
         .select(
             F.xxhash64(F.col("match_id"), F.col("round_number")).alias("round_key"),
             F.xxhash64(F.col("match_id")).alias("match_key"),
@@ -167,15 +186,14 @@ def gold_dim_round():
             "win_reason",
             (F.col("win_team") == player_team).alias("player_won"),
             F.coalesce(F.col("player_survived"), F.lit(False)).alias("player_survived"),
-            "money_start",
-            F.col("equip_value_start").alias("equip_value_start"),
+            F.coalesce("money_start", "money_first_tick").alias("money_start"),
+            equip.alias("equip_value"),
             F.when(equip.isNull(), "unknown")
             .when(equip < 2000, "eco")
             .when(equip < 3500, "force")
             .otherwise("full")
             .alias("round_type"),
-            # Zalozenie formatu MR12: pistolowki otwieraja obie polowy.
-            F.col("round_number").isin(0, 12).alias("is_pistol_round"),
+            "is_pistol_round",
             "score_ct_after",
             "score_t_after",
         )
@@ -195,8 +213,11 @@ def gold_dim_match():
         F.sum(F.when(F.col("player_survived"), 1).otherwise(0)).alias("rounds_survived"),
         F.min("round_start_ts").alias("first_round_ts"),
         F.max("round_end_ts").alias("last_round_ts"),
-        F.expr("max_by(score_ct_after, round_number)").alias("final_score_ct"),
-        F.expr("max_by(score_t_after, round_number)").alias("final_score_t"),
+        # Tablica wynikow z GSI zmienia znaczenie po zmianie stron, a snapshot
+        # z ostatniej rundy nie obejmuje jej samej. Liczba rund wygranych przez
+        # kazda ze stron jest jednoznaczna i zawsze sumuje sie do rounds_played.
+        F.sum(F.when(F.col("win_team") == "CT", 1).otherwise(0)).alias("rounds_won_ct_side"),
+        F.sum(F.when(F.col("win_team") == "T", 1).otherwise(0)).alias("rounds_won_t_side"),
         F.expr("min_by(map_name, round_number)").alias("map_name"),
         F.expr("min_by(map_mode, round_number)").alias("map_mode"),
         F.expr("min_by(player_key, round_number)").alias("player_key"),
@@ -227,8 +248,8 @@ def gold_dim_match():
             "rounds_won",
             rounds_lost.alias("rounds_lost"),
             "rounds_survived",
-            "final_score_ct",
-            "final_score_t",
+            "rounds_won_ct_side",
+            "rounds_won_t_side",
             F.when(F.col("rounds_won") > rounds_lost, "win")
             .when(F.col("rounds_won") < rounds_lost, "loss")
             .otherwise("draw")

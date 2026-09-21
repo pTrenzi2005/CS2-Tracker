@@ -2,7 +2,7 @@
 
 Kolejne tabele Silver czytaja juz gotowy struct zamiast powtarzac schemat
 JSON-a. Tutaj tez odsiewamy duplikaty - Event Hubs gwarantuje dostarczenie
-co najmniej raz, a klient ponawia wysylke zdarzen ze spoola po awarii sieci.
+co najmniej raz, wiec to samo zdarzenie moze trafic do Bronze wielokrotnie.
 """
 
 from pyspark import pipelines as dp
