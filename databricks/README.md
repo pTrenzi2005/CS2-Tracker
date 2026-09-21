@@ -47,6 +47,24 @@ strumieniu dopisywanym. Pelne przeliczenie przy skali jednego meczu
 (kilkanascie tysiecy tickow) jest tanie, a logika pozostaje odtwarzalna z
 historii Bronze.
 
+## Dwa zrodla liczb i po co oba
+
+Ticki urywaja sie w chwili smierci gracza, bo gra przelacza wtedy kamere na
+kolege z druzyny. Na nagraniu meczu na de_nuke ostatni tick az w 7 z 15 rund
+pokazywal gracza przy pelnym zyciu, mimo ze runde skonczyl martwy. Gdyby
+polegac wylacznie na tickach, statystyki bylyby drastycznie zanizone:
+1 wykryta smierc zamiast 8, 12 zabojstw zamiast 15, 1255 obrazen zamiast 1402.
+
+Dlatego liczby i pozycje pochodza z dwoch roznych miejsc:
+
+- **`fact_kills`, `fact_deaths`, `fact_damage`** - zdarzenia z tickow, kazde ze
+  wspolrzednymi. Pod heatmapy. Moga pomijac to, co wydarzylo sie w ostatnim
+  ulamku sekundy rundy, bo dla tych zdarzen zwyczajnie nie ma probki z pozycja.
+- **`fact_round_stats`** - sumy ze zdarzen `round_end`, czyli z ostatniego
+  pakietu rundy. Zrodlo prawdy dla K/D, ADR i procentu headshotow; zgadza sie
+  co do sztuki z licznikiem w grze. Kolumna `kills_with_position` mowi, ile z
+  tych zabojstw da sie postawic na mapie.
+
 ## Co daje warstwa Gold
 
 - **Heatmapy zabojstw i smierci** - `fact_kills` i `fact_deaths` maja `pos_x`,

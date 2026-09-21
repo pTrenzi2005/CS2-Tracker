@@ -51,6 +51,28 @@ zdarzenia cyklu zycia sa wykrywane na *wszystkich* pakietach, a nie tylko na
 tych dotyczacych nas - bywaja rundy, w ktorych zaden pakiet `over` nie opisuje
 juz naszego gracza.
 
+## Nagranie calego meczu bez chmury
+
+```powershell
+$env:CS2_SEND_TO_EVENTHUB="false"
+$env:CS2_OFFLINE_OUTPUT="output/mecz1_events.jsonl"
+$env:CS2_RAW_CAPTURE="output/mecz1_raw.jsonl"
+venv\Scripts\python gsi_server.py
+```
+
+Powstaja dwa pliki i obydwa sa potrzebne. `mecz1_events.jsonl` to dokladnie
+to, co poszloby do Event Hubs. `mecz1_raw.jsonl` to zrzut *wszystkich*
+pakietow sprzed filtrowania - bez niego nie da sie pozniej sprawdzic, czy
+odrzucilismy wlasciwe rzeczy, bo odrzucone pakiety nie zostawiaja po sobie
+sladu. Zrzut surowy odtwarza sie w kolko bez gry:
+
+```powershell
+venv\Scripts\python -m tests.replay --input output/mecz1_raw.jsonl
+```
+
+Serwer zatrzymuj przez Ctrl+C - wtedy domyka trwajacy mecz zdarzeniem
+`match_end`.
+
 ## Tryb offline i testy
 
 ```powershell
@@ -58,10 +80,15 @@ juz naszego gracza.
 $env:CS2_SEND_TO_EVENTHUB="false"; venv\Scripts\python gsi_server.py
 
 # odtworzenie nagranych pakietow bez gry i bez chmury
-venv\Scripts\python replay.py --input test_data --output output/replay.jsonl
+venv\Scripts\python -m tests.replay --output output/replay.jsonl
 
 venv\Scripts\python -m pytest tests -q
 ```
+
+[tests/replay.py](tests/replay.py) przepuszcza pliki z `test_data/` przez
+dokladnie te same moduly, ktorych uzywa serwer - rozni sie tylko tym, ze
+pakiety bierze z dysku zamiast z HTTP, a wynik odklada do listy zamiast do
+Event Hubs. Na tej samej funkcji opieraja sie fixtury w testach.
 
 Wszystkie ustawienia maja odpowiedniki w zmiennych srodowiskowych - lista w
 [config.py](config.py).

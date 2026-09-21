@@ -49,6 +49,8 @@ class MatchTracker:
         self.last_map_block: dict[str, Any] = {}
         self.started_rounds: set[int] = set()
         self.ended_rounds: set[int] = set()
+        self.current_round: int | None = None
+        self.last_round_wins: dict[str, str] = {}
         self._own_snapshot: dict[str, Any] | None = None
         self._own_snapshot_round: int | None = None
 
@@ -64,12 +66,21 @@ class MatchTracker:
             return events
 
         map_block = payload["map"]
+        if map_block.get("round_wins"):
+            self.last_round_wins = map_block["round_wins"]
+
         # Ekran koncowy sprawdzamy przed detekcja nowego meczu: inaczej kazdy
         # kolejny pakiet z "gameover" otwieralby mecz tylko po to, zeby go
         # natychmiast zamknac.
         if map_block.get("phase") == "gameover":
-            events.extend(self._close_match(provider_ts))
             self.last_ts = provider_ts
+            # Smierc w ostatniej rundzie widac dopiero na ekranie koncowym, bo
+            # gra przechodzi tam od razu, bez fazy "over". Mecz zamykamy wiec
+            # dopiero gdy zobaczymy tam swoj wlasny stan; jesli kamera stoi na
+            # kims innym, domknie go wyjscie do menu albo finalize().
+            if filters.is_own_player(payload):
+                self._remember_own_state(payload, self.current_round)
+                events.extend(self._close_match(provider_ts))
             return events
 
         if self._is_new_match(map_block, provider_ts):
@@ -83,6 +94,8 @@ class MatchTracker:
 
         phase = filters.round_phase(payload)
         round_number = self._round_number(map_block.get("round"), phase)
+        if round_number is not None:
+            self.current_round = round_number
 
         if filters.is_own_player(payload):
             self._remember_own_state(payload, round_number)
@@ -150,6 +163,8 @@ class MatchTracker:
         self.match_ended = False
         self.started_rounds.clear()
         self.ended_rounds.clear()
+        self.current_round = None
+        self.last_round_wins = {}
         self._own_snapshot = None
         self._own_snapshot_round = None
         return GsiEvent(
@@ -164,8 +179,9 @@ class MatchTracker:
     def _close_match(self, provider_ts: int | None) -> list[GsiEvent]:
         if self.match_id is None or self.match_ended:
             return []
+        events = self._finish_pending_round(provider_ts)
         self.match_ended = True
-        return [
+        events.append(
             GsiEvent(
                 event_type=EVENT_MATCH_END,
                 match_id=self.match_id,
@@ -177,6 +193,28 @@ class MatchTracker:
                     "rounds_played": len(self.ended_rounds),
                     "started_at_provider_ts": self.match_start_ts,
                 },
+            )
+        )
+        return events
+
+    def _finish_pending_round(self, provider_ts: int | None) -> list[GsiEvent]:
+        """Domyka ostatnia runde meczu, ktora nie dostala fazy ``over``.
+
+        Po ostatniej rundzie gra przechodzi prosto do ekranu koncowego z faza
+        ``freezetime``, wiec zwyciezca tej rundy nie pojawia sie nigdzie poza
+        slownikiem ``map.round_wins``.
+        """
+        round_number = self.current_round
+        if round_number is None or round_number in self.ended_rounds:
+            return []
+        win_reason = self.last_round_wins.get(str(round_number + 1))
+        if not win_reason:
+            return []
+        self.ended_rounds.add(round_number)
+        win_team = "CT" if win_reason.startswith("ct_") else "T" if win_reason.startswith("t_") else None
+        return [
+            self._build_round_end(
+                round_number, provider_ts, self.last_map_block, win_team, win_reason
             )
         ]
 
@@ -205,11 +243,28 @@ class MatchTracker:
 
     def _round_end(self, payload: Payload, round_number: int, provider_ts: int | None) -> GsiEvent:
         round_block = payload.get("round") or {}
-        # map_round_wins numeruje rundy od jedynki, my od zera.
-        win_reason = (payload.get("map_round_wins") or {}).get(str(round_number + 1))
+        # Komponent map_round_wins ladnie w bloku map jako round_wins i numeruje
+        # rundy od jedynki, my od zera.
+        round_wins = (payload.get("map") or {}).get("round_wins") or self.last_round_wins
+        return self._build_round_end(
+            round_number,
+            provider_ts,
+            build_map_block(payload),
+            round_block.get("win_team"),
+            round_wins.get(str(round_number + 1)),
+        )
+
+    def _build_round_end(
+        self,
+        round_number: int,
+        provider_ts: int | None,
+        map_block: dict[str, Any],
+        win_team: str | None,
+        win_reason: str | None,
+    ) -> GsiEvent:
         body: dict[str, Any] = {
-            "map": build_map_block(payload),
-            "win_team": round_block.get("win_team"),
+            "map": map_block,
+            "win_team": win_team,
             "win_reason": win_reason,
         }
         # Ostatni znany stan naszego gracza w tej rundzie. Kamera po smierci

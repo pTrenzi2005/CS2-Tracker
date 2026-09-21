@@ -16,6 +16,9 @@ LOG_LEVEL = os.getenv("CS2_LOG_LEVEL", "INFO")
 SEND_TO_EVENTHUB = os.getenv("CS2_SEND_TO_EVENTHUB", "true").lower() not in ("0", "false", "no")
 OFFLINE_OUTPUT_PATH = os.getenv("CS2_OFFLINE_OUTPUT", "output/events.jsonl")
 
+# Sciezka wlacza dodatkowy zrzut wszystkich pakietow sprzed filtrowania
+RAW_CAPTURE_PATH = os.getenv("CS2_RAW_CAPTURE", "")
+
 # Bufor i wysylka
 MAX_BATCH_EVENTS = int(os.getenv("CS2_MAX_BATCH_EVENTS", "100"))
 FLUSH_INTERVAL_S = float(os.getenv("CS2_FLUSH_INTERVAL_S", "0.2"))

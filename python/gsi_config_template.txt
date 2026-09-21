@@ -3,7 +3,7 @@
     "uri" "http://127.0.0.1:3000"
     "timeout" "5.0"
     "buffer"  "0.1"
-    "throttle" "0.15"
+    "throttle" "0.20"
     "heartbeat" "10.0"
     "data"
     {

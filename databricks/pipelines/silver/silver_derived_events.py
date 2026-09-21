@@ -19,7 +19,6 @@ TICKS_TABLE = f"{CATALOG}.silver.player_ticks"
 ROUND_EVENTS_TABLE = f"{CATALOG}.silver.round_events"
 
 BY_ROUND = Window.partitionBy("match_id", "round_number").orderBy("seq")
-BY_MATCH = Window.partitionBy("match_id").orderBy("seq")
 
 
 def ticks_with_deltas():
@@ -33,9 +32,12 @@ def ticks_with_deltas():
         .withColumn("prev_pos_x", F.lag("pos_x").over(BY_ROUND))
         .withColumn("prev_pos_y", F.lag("pos_y").over(BY_ROUND))
         .withColumn("prev_pos_z", F.lag("pos_z").over(BY_ROUND))
-        # Licznik zabojstw z match_stats jest kumulatywny, wiec porownujemy go
-        # w obrebie calego meczu, a nie pojedynczej rundy.
-        .withColumn("prev_match_kills", F.lag("match_kills").over(BY_MATCH))
+        # Kumulatywny licznik z match_stats tez porownujemy w obrebie rundy.
+        # Okno na poziomie meczu wykrywaloby zabojstwa z ostatnich ulamkow
+        # sekundy rundy, ale doklejaloby je do pierwszego ticku rundy
+        # nastepnej, czyli stawialoby na mapie punkt w miejscu respawnu.
+        # Komplet zabojstw dolicza fact_round_stats ze zdarzen round_end.
+        .withColumn("prev_match_kills", F.lag("match_kills").over(BY_ROUND))
     )
 
 

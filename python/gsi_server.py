@@ -8,6 +8,7 @@ import uvicorn
 from fastapi import FastAPI, Request
 
 import config
+from gsi.capture import RawCapture
 from gsi.envelope import EnvelopeFactory
 from gsi.match_state import MatchTracker
 from gsi.sender import EventHubSender, EventSink, FileSink
@@ -43,17 +44,22 @@ def build_sink() -> EventSink:
 tracker = MatchTracker(idle_timeout_s=config.MATCH_IDLE_TIMEOUT_S)
 envelopes = EnvelopeFactory()
 sink: EventSink = build_sink()
+raw_capture = RawCapture(config.RAW_CAPTURE_PATH) if config.RAW_CAPTURE_PATH else None
 counters: dict[str, int] = defaultdict(int)
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await sink.start()
+    if raw_capture is not None:
+        raw_capture.open()
     log.info("Serwer GSI nasluchuje na http://%s:%s", config.HOST, config.PORT)
     yield
     for event in tracker.finalize():
         sink.submit(envelopes.wrap(event))
     await sink.stop()
+    if raw_capture is not None:
+        raw_capture.close()
     log.info("Podsumowanie: %s", dict(counters))
 
 
@@ -70,6 +76,8 @@ async def gsi_endpoint(request: Request):
         return {"status": "ignored"}
 
     counters["received"] += 1
+    if raw_capture is not None:
+        raw_capture.write(payload)
     try:
         for event in tracker.process(payload):
             counters[event.event_type] += 1
@@ -91,6 +99,7 @@ async def health():
         "counters": dict(counters),
         "sink": dict(sink.stats),
         "queue_size": getattr(sink, "queue_size", 0),
+        "raw_captured": raw_capture.count if raw_capture is not None else None,
     }
 
 

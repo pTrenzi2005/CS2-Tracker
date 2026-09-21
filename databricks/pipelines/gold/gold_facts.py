@@ -13,6 +13,7 @@ KILL_EVENTS = f"{CATALOG}.silver.kill_events"
 DEATH_EVENTS = f"{CATALOG}.silver.death_events"
 DAMAGE_EVENTS = f"{CATALOG}.silver.damage_events"
 ROUND_STATE = f"{CATALOG}.silver.round_player_state"
+ROUND_EVENTS = f"{CATALOG}.silver.round_events"
 DIM_ROUND = f"{CATALOG}.gold.dim_round"
 
 
@@ -211,12 +212,27 @@ def gold_fact_round_stats():
             ),
         )
     )
+    # Ticki urywaja sie w chwili smierci, bo kamera przechodzi na kolege z
+    # druzyny. Liczniki ze zdarzenia round_end pochodza z ostatniego pakietu
+    # rundy, wiec obejmuja rowniez to, co wydarzylo sie po ostatnim ticku, i to
+    # one sa tu zrodlem prawdy dla sum.
+    final_state = (
+        spark.read.table(ROUND_EVENTS)
+        .filter(F.col("event_type") == "round_end")
+        .groupBy("match_id", "round_number")
+        .agg(
+            F.expr("max_by(round_kills, seq)").alias("final_kills"),
+            F.expr("max_by(round_killhs, seq)").alias("final_headshots"),
+            F.expr("max_by(round_totaldmg, seq)").alias("final_damage"),
+        )
+    )
 
     joined = (
         rounds.join(state, ["match_id", "round_number"], "left")
         .join(kills, ["match_id", "round_number"], "left")
         .join(deaths, ["match_id", "round_number"], "left")
         .join(damage, ["match_id", "round_number"], "left")
+        .join(final_state, ["match_id", "round_number"], "left")
     )
     time_alive = F.round(
         F.col("death_ts").cast("double") - F.col("round_start_ts").cast("double"), 2
@@ -236,14 +252,21 @@ def gold_fact_round_stats():
         "player_survived",
         "round_start_ts",
         "round_duration_s",
-        F.coalesce(F.greatest(F.col("kills"), F.col("round_kills")), F.lit(0)).alias("kills"),
-        F.coalesce(F.greatest(F.col("headshot_kills"), F.col("round_killhs")), F.lit(0)).alias(
-            "headshot_kills"
-        ),
+        F.coalesce(
+            F.greatest(F.col("final_kills"), F.col("kills"), F.col("round_kills")), F.lit(0)
+        ).alias("kills"),
+        F.coalesce(
+            F.greatest(F.col("final_headshots"), F.col("headshot_kills"), F.col("round_killhs")),
+            F.lit(0),
+        ).alias("headshot_kills"),
+        # Zabojstwa, dla ktorych mamy tick, a wiec i pozycje na mapie. Roznica
+        # wobec kolumny kills to zabojstwa z samej koncowki rundy.
+        F.coalesce(F.col("kills"), F.lit(0)).alias("kills_with_position"),
         F.when(F.col("death_ts").isNotNull(), 1).otherwise(0).alias("deaths"),
-        F.coalesce(F.greatest(F.col("damage_dealt"), F.col("round_damage")), F.lit(0)).alias(
-            "damage_dealt"
-        ),
+        F.coalesce(
+            F.greatest(F.col("final_damage"), F.col("damage_dealt"), F.col("round_damage")),
+            F.lit(0),
+        ).alias("damage_dealt"),
         F.coalesce(F.col("damage_taken"), F.lit(0)).alias("damage_taken"),
         F.coalesce(time_alive, F.col("round_duration_s")).alias("time_alive_s"),
         F.coalesce(F.col("distance_units"), F.lit(0.0)).alias("distance_units"),

@@ -14,11 +14,19 @@ def make_payload(
     map_round: int = 0,
     round_phase: str = "live",
     health: int = 100,
+    round_wins: dict[str, str] | None = None,
+    win_team: str | None = None,
 ):
+    map_block = {"name": map_name, "mode": "competitive", "phase": map_phase, "round": map_round}
+    if round_wins is not None:
+        map_block["round_wins"] = round_wins
+    round_block = {"phase": round_phase}
+    if win_team is not None:
+        round_block["win_team"] = win_team
     return {
         "provider": {"steamid": OWN_STEAMID, "timestamp": ts},
-        "map": {"name": map_name, "mode": "competitive", "phase": map_phase, "round": map_round},
-        "round": {"phase": round_phase},
+        "map": map_block,
+        "round": round_block,
         "player": {
             "steamid": OWN_STEAMID,
             "name": "tester",
@@ -94,6 +102,52 @@ def test_gameover_konczy_mecz_dokladnie_raz():
     assert second == []
 
 
+def test_powod_wygranej_czytany_z_map_round_wins():
+    # Komponent map_round_wins trafia do bloku map jako round_wins, a nie na
+    # najwyzszy poziom pakietu.
+    wins = {"1": "t_win_elimination"}
+    tracker = MatchTracker()
+    tracker.process(make_payload(map_round=0, round_wins=wins))
+    events = tracker.process(
+        make_payload(ts=1001, map_round=1, round_phase="over", win_team="T", round_wins=wins)
+    )
+    assert types(events) == [EVENT_ROUND_END]
+    assert events[0].body["win_reason"] == "t_win_elimination"
+
+
+def test_ostatnia_runda_domykana_na_ekranie_koncowym():
+    # Po ostatniej rundzie gra idzie prosto do gameover z faza freezetime, wiec
+    # zwyciezcy nie ma nigdzie poza round_wins, a smierc widac dopiero tam.
+    wins = {"1": "ct_win_elimination"}
+    tracker = MatchTracker()
+    tracker.process(make_payload(map_round=0, round_wins=wins))
+    events = tracker.process(
+        make_payload(
+            ts=1002,
+            map_round=1,
+            map_phase="gameover",
+            round_phase="freezetime",
+            round_wins=wins,
+            health=0,
+        )
+    )
+    assert types(events) == [EVENT_ROUND_END, EVENT_MATCH_END]
+    koniec = events[0]
+    assert koniec.round_number == 0
+    assert koniec.body["win_team"] == "CT"
+    assert koniec.body["win_reason"] == "ct_win_elimination"
+    assert koniec.body["player_survived"] is False
+
+
+def test_ekran_koncowy_bez_naszego_stanu_nie_zamyka_meczu():
+    tracker = MatchTracker()
+    tracker.process(make_payload())
+    obcy = make_payload(ts=1001, map_phase="gameover", round_phase="freezetime")
+    obcy["player"]["steamid"] = "76561190000000000"
+    assert tracker.process(obcy) == []
+    assert types(tracker.finalize()) == [EVENT_MATCH_END]
+
+
 def test_finalize_domyka_trwajacy_mecz():
     tracker = MatchTracker()
     tracker.process(make_payload())
@@ -118,7 +172,7 @@ def test_koniec_rundy_zachowuje_smierc_z_konca_rundy(envelopes):
 
 
 def test_match_id_jest_deterministyczny(payloads):
-    from replay import replay
+    from tests.replay import replay
 
     first = {e["match_id"] for e in replay(payloads)}
     second = {e["match_id"] for e in replay(payloads)}

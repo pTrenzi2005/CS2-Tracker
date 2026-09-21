@@ -1,19 +1,15 @@
 import json
-import sys
 from pathlib import Path
 
 import pytest
 
-PYTHON_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PYTHON_DIR))
+from tests.replay import DEFAULT_INPUT, load_payloads, replay
 
-TEST_DATA = PYTHON_DIR / "test_data"
+TEST_DATA = DEFAULT_INPUT
 
 
 @pytest.fixture(scope="session")
 def payloads():
-    from replay import load_payloads
-
     if not TEST_DATA.exists():
         pytest.skip("Brak katalogu test_data z nagranymi pakietami GSI")
     return load_payloads(TEST_DATA)
@@ -21,8 +17,6 @@ def payloads():
 
 @pytest.fixture(scope="session")
 def envelopes(payloads):
-    from replay import replay
-
     return replay(payloads)
 
 
