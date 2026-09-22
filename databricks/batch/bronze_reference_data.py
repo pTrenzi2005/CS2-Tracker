@@ -20,7 +20,7 @@ from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 
 CATALOG = dbutils.widgets.get("catalog")
-ROOT = f"/Volumes/{CATALOG}/bronze/raw/batch_reference_data"
+ROOT = f"/Volumes/{CATALOG}/bronze/raw"
 
 # Job przekazuje id przebiegu przez taskValues; przy recznym uruchomieniu notebooka
 # bierzemy wskaznik zapisany obok manifestow.

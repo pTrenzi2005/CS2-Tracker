@@ -41,7 +41,7 @@ KAGGLE_DATASET = dbutils.widgets.get("kaggle_dataset")
 DOWNLOAD_IMAGES = dbutils.widgets.get("download_images").lower() == "true"
 SECRET_SCOPE = dbutils.widgets.get("secret_scope")
 
-ROOT = f"/Volumes/{CATALOG}/bronze/raw/reference"
+ROOT = f"/Volumes/{CATALOG}/bronze/raw"
 RAW_BASE = f"https://raw.githubusercontent.com/{REPO}/{REF}"
 
 RUN_TS = datetime.now(timezone.utc)
