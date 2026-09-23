@@ -32,7 +32,7 @@ MAP_ICONS_RAW = f"{CATALOG}.bronze.map_icons_raw"
 MAP_ASSETS_RAW = f"{CATALOG}.bronze.map_assets_raw"
 WEAPON_RAW = f"{CATALOG}.bronze.weapon_spreadsheet_raw"
 
-INGEST_RUN_ID = dbutils.jobs.taskValues.get(taskKey="download", key="ingest_run_id", debugValue="")
+INGEST_RUN_ID = dbutils.jobs.taskValues.get(taskKey="Download_data", key="ingest_run_id", debugValue="")
 if not INGEST_RUN_ID:
     INGEST_RUN_ID = spark.read.table(MAP_ICONS_RAW).agg(F.max("ingest_run_id")).collect()[0][0]
 print(f"ingest_run_id={INGEST_RUN_ID}")

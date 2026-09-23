@@ -24,7 +24,7 @@ ROOT = f"/Volumes/{CATALOG}/bronze/raw"
 
 # Job przekazuje id przebiegu przez taskValues; przy recznym uruchomieniu notebooka
 # bierzemy wskaznik zapisany obok manifestow.
-INGEST_RUN_ID = dbutils.jobs.taskValues.get(taskKey="download", key="ingest_run_id", debugValue="")
+INGEST_RUN_ID = dbutils.jobs.taskValues.get(taskKey="Download_data", key="ingest_run_id", debugValue="")
 if not INGEST_RUN_ID:
     with open(f"{ROOT}/_manifest/latest.json", "r", encoding="utf-8") as handle:
         INGEST_RUN_ID = json.load(handle)["ingest_run_id"]
@@ -58,7 +58,7 @@ manifest = (
     )
     .select("ingest_run_id", "downloaded_at", "source_ref", "source_commit", "file.*")
 )
-manifest.cache()
+
 print(f"pozycji w manifescie: {manifest.count()}")
 display(manifest.groupBy("source_system", "artifact_type").count())
 
@@ -79,7 +79,7 @@ if os.path.isdir(f"{ROOT}/map_icons/radar_info"):
 
 text_files = (
     spark.read.option("wholetext", True)
-    .text(*text_paths)
+    .text(text_paths)
     .select(
         F.element_at(F.split(F.col("_metadata.file_path"), "/"), -1).alias("file_name"),
         F.col("value").alias("raw_content"),
