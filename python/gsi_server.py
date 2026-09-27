@@ -18,6 +18,8 @@ logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL.upper(), logging.INFO),
     format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
 )
+# SDK Azure na INFO wypisuje kazda probe logowania i kazde zadanie HTTP do Key Vault.
+logging.getLogger("azure").setLevel(logging.WARNING)
 log = logging.getLogger("gsi")
 
 

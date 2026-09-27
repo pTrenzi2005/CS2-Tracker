@@ -78,8 +78,7 @@ if os.path.isdir(f"{ROOT}/map_icons/radar_info"):
     text_paths.append(f"{ROOT}/map_icons/radar_info")
 
 text_files = (
-    spark.read.option("wholetext", True)
-    .text(text_paths)
+    spark.read.text(text_paths, wholetext=True)
     .select(
         F.element_at(F.split(F.col("_metadata.file_path"), "/"), -1).alias("file_name"),
         F.col("value").alias("raw_content"),
