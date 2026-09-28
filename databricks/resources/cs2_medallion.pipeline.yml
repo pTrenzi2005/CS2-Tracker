@@ -1,17 +1,10 @@
-# Sciezki w plikach z resources/ sa wzgledne do tego pliku, nie do korzenia
-# bundla - stad ../pipelines/.
-#
-# Pola development i photon sa tu celowo pominiete: pierwsze ustawia tryb
-# targetu (development / production), drugie jest ignorowane przy serverless.
+# Paths are relative to this file.
 
 resources:
   pipelines:
     cs2_medallion:
       name: cs2_gsi_medallion
       catalog: ${var.catalog}
-      # Domyslny schemat dla nazw niekwalifikowanych. Wszystkie tabele w kodzie
-      # uzywaja pelnych nazw catalog.schema.table, wiec publikuja sie do
-      # bronze, silver i gold niezaleznie od tej wartosci.
       schema: bronze
       serverless: true
       continuous: false

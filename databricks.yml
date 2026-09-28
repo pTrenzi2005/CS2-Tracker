@@ -1,12 +1,4 @@
-# Databricks Asset Bundle: potok Bronze -> Silver -> Gold dla telemetrii CS2.
-#
-#   databricks bundle validate -t dev
-#   databricks bundle deploy   -t dev
-#   databricks bundle run      cs2_medallion -t dev
-#
-# Przed pierwszym wdrozeniem podmien ADB_WORKSPACE_URL na adres swojego
-# workspace (Databricks -> prawy gorny rog -> adres z paska przegladarki,
-# postaci https://adb-<id>.<n>.azuredatabricks.net).
+# Prod host is a placeholder. Replace ADB_WORKSPACE_URL before the first prod deploy.
 
 bundle:
   name: cs2-tracker
@@ -16,25 +8,25 @@ include:
 
 variables:
   catalog:
-    description: Katalog Unity Catalog, w ktorym powstaja schematy bronze, silver i gold.
+    description: Unity Catalog for the bronze, silver, and gold schemas.
     default: cs2_dev
   eventhub_namespace:
-    description: Namespace Azure Event Hubs, bez sufiksu servicebus.windows.net.
+    description: Azure Event Hubs namespace, without the servicebus.windows.net suffix.
     default: evhcs2tracker
   eventhub_name:
-    description: Nazwa Event Huba; dla warstwy Bronze jest to nazwa topicu Kafki.
+    description: Event Hub name. Bronze reads it as the Kafka topic.
     default: cs2tracker_evh
   secret_scope:
-    description: Secret scope Databricks z connection stringiem do Event Hubs.
+    description: Databricks secret scope that holds the Event Hubs connection string.
     default: cs2tracker-secrets
   secret_key:
-    description: Klucz w secret scope przechowujacy connection string.
+    description: Secret key for the connection string.
     default: evh-connection-string
   starting_offsets:
-    description: Miejsce startu Bronze przy pierwszym uruchomieniu (earliest albo latest).
+    description: Bronze start on the first run. earliest or latest.
     default: earliest
 
-# Klient GSI dziala lokalnie przy grze i nie ma po co trafiac do workspace.
+# The GSI client runs next to the game and is not deployed to the workspace.
 sync:
   exclude:
     - python/**
@@ -53,5 +45,5 @@ targets:
       catalog: cs2_prod
     workspace:
       host: https://ADB_WORKSPACE_URL.azuredatabricks.net
-      # Tryb production nie moze publikowac do katalogu domowego uzytkownika.
+      # Production mode cannot publish into a user's home directory.
       root_path: /Shared/.bundle/${bundle.name}/${bundle.target}
