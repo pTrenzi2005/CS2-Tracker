@@ -1,4 +1,7 @@
-"""Silver: splaszczone ticki gracza z aktywnej fazy rundy."""
+"""
+Silver: player ticks from the active round.
+`silver.player_ticks` — one row per tick.
+"""
 
 from pyspark import pipelines as dp
 from pyspark.sql import functions as F
@@ -8,23 +11,22 @@ PARSED_TABLE = f"{CATALOG}.silver.gsi_events_parsed"
 
 
 def coordinate(column, index):
-    """GSI podaje pozycje jako ``"1018.97, 508.28, 100.00"``."""
     return F.trim(F.split(F.col(column), ",").getItem(index)).cast("double")
 
 
 @dp.table(
     name=f"{CATALOG}.silver.player_ticks",
-    comment="Stan naszego gracza probkowany w trakcie aktywnej rundy.",
+    comment="Our player's state sampled during the active round.",
     cluster_by=["match_id", "round_number"],
     table_properties={"quality": "silver"},
 )
 @dp.expect_all_or_drop(
     {
-        "numer_rundy_nieujemny": "round_number >= 0",
-        "zycie_w_zakresie": "health BETWEEN 0 AND 100",
-        "obrazenia_nieujemne": "round_totaldmg >= 0",
-        "znana_pozycja": "pos_x IS NOT NULL AND pos_y IS NOT NULL AND pos_z IS NOT NULL",
-        "znana_druzyna": "player_team IN ('CT', 'T')",
+        "non_negative_round": "round_number >= 0",
+        "health_in_range": "health BETWEEN 0 AND 100",
+        "non_negative_damage": "round_totaldmg >= 0",
+        "known_position": "pos_x IS NOT NULL AND pos_y IS NOT NULL AND pos_z IS NOT NULL",
+        "known_team": "player_team IN ('CT', 'T')",
     }
 )
 def silver_player_ticks():
@@ -81,8 +83,6 @@ def silver_player_ticks():
         .withColumn("fwd_x", coordinate("forward_raw", 0))
         .withColumn("fwd_y", coordinate("forward_raw", 1))
         .withColumn("fwd_z", coordinate("forward_raw", 2))
-        # Kierunek patrzenia w stopniach - wygodniejszy do wizualizacji na radarze
-        # niz surowy wektor.
         .withColumn("yaw_deg", F.degrees(F.atan2(F.col("fwd_y"), F.col("fwd_x"))))
         .withColumn("pitch_deg", F.degrees(F.asin(-F.col("fwd_z"))))
         .withColumn("is_alive", F.col("health") > 0)

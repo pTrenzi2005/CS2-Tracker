@@ -1,8 +1,6 @@
-"""Silver: jedno miejsce, w ktorym koperta zdarzenia GSI jest parsowana.
-
-Kolejne tabele Silver czytaja juz gotowy struct zamiast powtarzac schemat
-JSON-a. Tutaj tez odsiewamy duplikaty - Event Hubs gwarantuje dostarczenie
-co najmniej raz, wiec to samo zdarzenie moze trafic do Bronze wielokrotnie.
+"""
+Silver: parsed GSI event envelopes.
+`silver.gsi_events_parsed` — one row per event, deduplicated.
 """
 
 from pyspark import pipelines as dp
@@ -52,19 +50,19 @@ ENVELOPE_SCHEMA = (
 
 @dp.table(
     name=f"{CATALOG}.silver.gsi_events_parsed",
-    comment="Koperta zdarzenia GSI rozpakowana ze surowego JSON-a i odduplikowana.",
+    comment="GSI event envelope parsed from raw JSON and deduplicated.",
     cluster_by=["match_id", "event_type"],
     table_properties={"quality": "silver"},
 )
 @dp.expect_all_or_drop(
     {
-        "poprawny_json": "event_id IS NOT NULL",
-        "znany_mecz": "match_id IS NOT NULL",
-        "znany_gracz": "steamid IS NOT NULL",
-        "znany_typ_zdarzenia": (
+        "valid_json": "event_id IS NOT NULL",
+        "known_match": "match_id IS NOT NULL",
+        "known_player": "steamid IS NOT NULL",
+        "known_event_type": (
             "event_type IN ('tick', 'round_start', 'round_end', 'match_start', 'match_end')"
         ),
-        "znany_czas": "client_ts IS NOT NULL",
+        "known_time": "client_ts IS NOT NULL",
     }
 )
 def silver_gsi_events_parsed():

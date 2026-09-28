@@ -2,22 +2,16 @@
 # MAGIC %md
 # MAGIC # Reference data (3/4) - Silver
 # MAGIC
-# MAGIC Cztery tabele wyciagniete z Bronze:
+# MAGIC Overwritten silver tables for the latest bronze snapshot (`ingest_run_id`):
+# MAGIC - `silver.map_reference` — one row per map
+# MAGIC - `silver.map_level` — one row per map and radar level
+# MAGIC - `silver.map_zone` — one row per map and zone
+# MAGIC - `silver.weapon_attributes` — one row per weapon
 # MAGIC
-# MAGIC | Tabela | Ziarno | Zrodlo |
-# MAGIC | --- | --- | --- |
-# MAGIC | `silver.map_reference` | mapa | `available.json` + plik overview |
-# MAGIC | `silver.map_level` | mapa x poziom radaru | `verticalsections` |
-# MAGIC | `silver.map_zone` | mapa x strefa | `bombA_*`, `bombB_*`, `CTSpawn_*`, `TSpawn_*` |
-# MAGIC | `silver.weapon_attributes` | bron | arkusz `Raw Values` |
-# MAGIC
-# MAGIC Job nie ma expectations z Lakeflow, wiec kontrakty danych wymusza funkcja
-# MAGIC `expect_all_or_drop` nizej - odsiewa te same rekordy i raportuje te same liczniki,
-# MAGIC tylko do logu Joba zamiast do event logu potoku.
 
 # COMMAND ----------
 
-dbutils.widgets.text("catalog", "cs2_dev", "Katalog Unity Catalog")
+dbutils.widgets.text("catalog", "cs2_dev", "Unity Catalog")
 
 # COMMAND ----------
 
@@ -35,20 +29,13 @@ WEAPON_RAW = f"{CATALOG}.bronze.weapon_spreadsheet_raw"
 INGEST_RUN_ID = dbutils.jobs.taskValues.get(taskKey="Download_data", key="ingest_run_id", debugValue="")
 if not INGEST_RUN_ID:
     INGEST_RUN_ID = spark.read.table(MAP_ICONS_RAW).agg(F.max("ingest_run_id")).collect()[0][0]
-print(f"ingest_run_id={INGEST_RUN_ID}")
 
-# Bronze jest append-only, Silver opisuje wylacznie najswiezszy snapshot.
 map_icons = spark.read.table(MAP_ICONS_RAW).filter(F.col("ingest_run_id") == INGEST_RUN_ID)
 map_assets = spark.read.table(MAP_ASSETS_RAW).filter(F.col("ingest_run_id") == INGEST_RUN_ID)
 weapon_raw = spark.read.table(WEAPON_RAW).filter(F.col("ingest_run_id") == INGEST_RUN_ID)
 
-
+#expectation
 def expect_all_or_drop(df: DataFrame, table_name: str, rules: dict[str, str]) -> DataFrame:
-    """Odpowiednik dekoratora `@dp.expect_all_or_drop` z potoku GSI.
-
-    Warunek dajacy NULL liczy sie jako naruszenie, tak samo jak w Lakeflow - odsiewa go
-    `filter`, bo NULL nie jest prawda.
-    """
     violations = (
         df.agg(
             *[F.sum(F.when(F.expr(rule), 0).otherwise(1)).alias(name) for name, rule in rules.items()]
@@ -58,31 +45,31 @@ def expect_all_or_drop(df: DataFrame, table_name: str, rules: dict[str, str]) ->
     )
     failed = {name: count for name, count in violations.items() if count}
     if failed:
-        print(f"{table_name}: odrzucone rekordy {failed}")
+        print(f"{table_name}: dropped rows {failed}")
     condition = reduce(lambda left, right: left & right, [F.expr(rule) for rule in rules.values()])
     return df.filter(condition)
 
 
 def write(df: DataFrame, table_name: str, comment: str) -> None:
-    """Snapshot danych referencyjnych - nadpisanie w calosci jest idempotentne."""
     full_name = f"{CATALOG}.silver.{table_name}"
-    df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(full_name)
+    (
+        df.write.mode("overwrite")
+        .option("overwriteSchema", "true")
+        .saveAsTable(full_name)
+    )
     spark.sql(f"COMMENT ON TABLE {full_name} IS '{comment}'")
-    print(f"silver.{table_name}: {spark.read.table(full_name).count()} wierszy")
 
 
 def blank_to_null(column, cast_to: str):
-    """`regexp_extract` bez dopasowania zwraca pusty string - to brak klucza, nie zero."""
     return F.when(column == "", None).otherwise(column).cast(cast_to)
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Manifest map
+# MAGIC ## Map manifest
 # MAGIC
-# MAGIC Klucze obiektu `maps` to nazwy map, wiec schemat nie moze byc structem o stalych
-# MAGIC polach - uzywamy `MAP<STRING, STRUCT<...>>` i rozwijamy go `explode`. Tak samo
-# MAGIC `verticalsections`, gdzie kluczem jest nazwa poziomu (`default`, `lower`).
+# MAGIC `maps` and `verticalsections` use dynamic keys, so they are read as `MAP` and exploded.
+# MAGIC
 
 # COMMAND ----------
 
@@ -103,15 +90,12 @@ manifest_maps = (
     .select("source_commit", F.from_json("raw_content", MANIFEST_SCHEMA).alias("manifest"))
     .select("source_commit", F.explode("manifest.maps").alias("map_name", "entry"))
 )
-print(f"map w manifescie: {manifest_maps.count()}")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Pliki overview
+# MAGIC ## Radar overview files
 # MAGIC
-# MAGIC Format KeyValues Valve'a: `"klucz"<tab>"wartosc"  // komentarz`. Wyciagamy z niego
-# MAGIC tylko to, czego nie ma w `available.json`, czyli strefy plantu, respawny i insety.
 
 # COMMAND ----------
 
@@ -121,13 +105,10 @@ radar_text = map_icons.filter(F.col("artifact_type") == "radar_info").select(
 
 
 def key_value(key: str):
-    """Liczba spod klucza `key` w pliku overview, albo NULL gdy mapa go nie ma."""
     pattern = f'(?i)"{key}"\\s*"\\s*(-?[0-9]+(?:\\.[0-9]+)?)\\s*"'
     return blank_to_null(F.regexp_extract(F.col("raw_content"), pattern, 1), "double")
 
 
-# Mapy spolecznosciowe wygenerowane RadGenem nie maja ani klucza `material`, ani stref -
-# dla nich wszystkie ponizsze kolumny beda puste i tak ma byc.
 overview = radar_text.select(
     "map_name",
     blank_to_null(
@@ -150,7 +131,8 @@ overview = radar_text.select(
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## `silver.map_reference`
+# MAGIC ## `silver.map_reference` - map metadata, radar transform, and image paths
+# MAGIC
 
 # COMMAND ----------
 
@@ -160,8 +142,6 @@ icons = map_assets.filter(F.col("asset_type") == "icon").select(
 
 prefix = F.split(F.col("map_name"), "_").getItem(0)
 radar = F.col("entry.radar_info")
-# size() na NULL-owej mapie zwraca -1 albo NULL zaleznie od trybu ANSI, wiec brak sekcji
-# rozstrzygamy jawnie przez isNull().
 section_count = (
     F.when(radar["verticalsections"].isNull(), F.lit(0))
     .otherwise(F.size(radar["verticalsections"]))
@@ -187,7 +167,6 @@ map_reference = (
         radar["pos_x"].alias("radar_pos_x"),
         radar["pos_y"].alias("radar_pos_y"),
         radar["scale"].alias("radar_scale"),
-        # rotate i zoom wystepuja tylko na czesci map; brak wpisu znaczy "bez obrotu".
         F.coalesce(radar["rotate"], F.lit(0.0)).alias("radar_rotate"),
         F.coalesce(radar["zoom"], F.lit(1.0)).alias("radar_zoom"),
         "radar_material",
@@ -218,14 +197,12 @@ map_reference = expect_all_or_drop(
     map_reference,
     "map_reference",
     {
-        "znana_mapa": "map_name IS NOT NULL AND map_name <> ''",
-        # Transformacja swiat -> piksel dzieli przez skale, wiec NULL albo zero psuje
-        # kazda heatmape zbudowana na tej mapie.
-        "kompletna_transformacja": (
+        "known_map": "map_name IS NOT NULL AND map_name <> ''",
+        "complete_transform": (
             "NOT has_radar OR (radar_pos_x IS NOT NULL AND radar_pos_y IS NOT NULL "
             "AND radar_scale > 0)"
         ),
-        "frakcje_w_zakresie": (
+        "fractions_in_range": (
             "coalesce(bombsite_a_x, 0) BETWEEN 0 AND 1 AND coalesce(ct_spawn_x, 0) BETWEEN 0 AND 1"
         ),
     },
@@ -233,18 +210,16 @@ map_reference = expect_all_or_drop(
 write(
     map_reference,
     "map_reference",
-    "Metadane map z repozytorium cs2-map-icons: transformacja radaru, strefy, obrazy.",
+    "Map metadata from cs2-map-icons: radar transform, zones, and images.",
 )
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## `silver.map_level`
+# MAGIC ## `silver.map_level` - radar level, altitude range, and background image
 # MAGIC
-# MAGIC Mapy wielopoziomowe (nuke, vertigo, boulder) maja osobny obraz radaru dla kazdej
-# MAGIC wysokosci. Mapy jednopoziomowe dostaja sztuczny poziom `default` z zakresem
-# MAGIC obejmujacym cala mape, zeby wyszukiwanie po `pos_z >= altitude_min AND pos_z <
-# MAGIC altitude_max` dzialalo wszedzie tak samo i zawsze zwracalo jeden wiersz.
+# MAGIC Single-level maps get a synthetic `default` level covering the full altitude range.
+# MAGIC
 
 # COMMAND ----------
 
@@ -278,11 +253,7 @@ single_level = with_radar.filter(~has_sections).select(
     F.lit(ALTITUDE_LIMIT).alias("altitude_max"),
 )
 
-# Nazwa pliku radaru to <mapa>_radar z przyrostkiem formatu zrodlowego, a poziom inny niz
-# `default` wchodzi miedzy nazwe mapy i slowo radar: de_nuke_lower_radar_psd.png. Przyrostek
-# zalezy od tego, z czego Valve wygenerowalo obraz (_psd, _tga, albo nic), dlatego
-# porownujemy nazwy po jego odcieciu, zamiast zakladac jeden wariant. Odsiewa to przy okazji
-# warianty poboczne z tego samego repozytorium (_spectate_tga, kopie z hashem w nazwie).
+# File names vary by source suffix (_psd, _tga, or none): de_nuke_lower_radar_psd.png.
 IMAGE_SUFFIX = "(?i)(_(psd|tga|vtf|dds))?\\.png$"
 
 expected_name = F.concat(
@@ -330,20 +301,18 @@ map_level = expect_all_or_drop(
     map_level,
     "map_level",
     {
-        "znany_poziom": "map_name IS NOT NULL AND level_name IS NOT NULL",
-        "zakres_wysokosci": "altitude_min < altitude_max",
-        "znany_obraz": "radar_url IS NOT NULL",
+        "known_level": "map_name IS NOT NULL AND level_name IS NOT NULL",
+        "altitude_range": "altitude_min < altitude_max",
+        "known_image": "radar_url IS NOT NULL",
     },
 )
-write(map_level, "map_level", "Poziomy radaru mapy z zakresem wysokosci i obrazem tla.")
+write(map_level, "map_level", "Map radar levels with altitude range and background image.")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## `silver.map_zone`
+# MAGIC ## `silver.map_zone` - bombsite and spawn positions as radar-image fractions
 # MAGIC
-# MAGIC Wspolrzedne to ulamek boku obrazu radaru (0-1), nie jednostki swiata - przeliczenie
-# MAGIC na wspolrzedne gry robi warstwa Gold, bo potrzebuje do tego skali i punktu zero.
 
 # COMMAND ----------
 
@@ -374,23 +343,19 @@ map_zone = expect_all_or_drop(
     map_zone,
     "map_zone",
     {
-        # Mapy bez stref plantu (ar_, cs_) po prostu nie maja tych kluczy w pliku overview.
-        "znana_pozycja": "frac_x IS NOT NULL AND frac_y IS NOT NULL",
-        "frakcje_w_zakresie": "frac_x BETWEEN 0 AND 1 AND frac_y BETWEEN 0 AND 1",
+        "known_position": "frac_x IS NOT NULL AND frac_y IS NOT NULL",
+        "fractions_in_range": "frac_x BETWEEN 0 AND 1 AND frac_y BETWEEN 0 AND 1",
     },
 )
-write(map_zone, "map_zone", "Strefy plantu i respawny jako ulamek boku obrazu radaru.")
+write(map_zone, "map_zone", "Bombsite and spawn zones as a fraction of the radar image.")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## `silver.weapon_attributes`
+# MAGIC ## `silver.weapon_attributes` - weapon stats from the Raw Values sheet
 # MAGIC
-# MAGIC Arkusz `Raw Values` ma 53 kolumny i te same nazwy broni, ktorych uzywa GSI
-# MAGIC (`ak47`, `m4a1_silencer`, `usp_silencer`), tylko bez przedrostka `weapon_`.
-# MAGIC Arkusz `Simple` zostaje w Bronze - niesie te same liczby, ale w formie
-# MAGIC prezentacyjnej (`$1,300`, `93.20%`) i z dodatkowymi wierszami wariantow
-# MAGIC (`AUG (scoped)`), ktore nie maja odpowiednika w telemetrii.
+# MAGIC Names match GSI without the `weapon_` prefix. The Simple sheet stays in bronze.
+# MAGIC
 
 # COMMAND ----------
 
@@ -454,7 +419,6 @@ WEAPON_CSV_SCHEMA = ", ".join(
 
 
 def money(column: str):
-    """`$1,300` i `$300` to ta sama kolumna w arkuszu - zostawiamy same cyfry."""
     return F.regexp_replace(F.col(column), "[^0-9]", "").cast("int")
 
 
@@ -465,9 +429,6 @@ is_blank = F.regexp_replace(F.col("raw_line"), ",", "").rlike("^\\s*$")
 lines_in_order = Window.partitionBy("file_name").orderBy("line_number")
 
 parsed = (
-    # Naglowek powtarza sie nad kazdym blokiem i to on niesie nazwe kategorii w pierwszej
-    # kolumnie ("Pistols", "Automatic Rifles", "LMGs"). Przenosimy ja w dol po numerze
-    # linii, zanim naglowki zostana odsiane.
     raw_values.withColumn(
         "weapon_category",
         F.last(F.when(is_header, F.split(F.col("raw_line"), ",").getItem(0)), ignorenulls=True).over(
@@ -521,15 +482,15 @@ weapon_attributes = expect_all_or_drop(
     weapon_attributes,
     "weapon_attributes",
     {
-        "znana_bron": "weapon_name IS NOT NULL AND weapon_name <> ''",
-        "dodatnie_obrazenia": "damage > 0",
-        "dodatni_takt": "cycle_time_s > 0",
-        "znana_cena": "price_usd IS NOT NULL AND price_usd >= 0",
-        "znany_typ": "weapon_type IS NOT NULL",
+        "known_weapon": "weapon_name IS NOT NULL AND weapon_name <> ''",
+        "positive_damage": "damage > 0",
+        "positive_cycle_time": "cycle_time_s > 0",
+        "known_price": "price_usd IS NOT NULL AND price_usd >= 0",
+        "known_type": "weapon_type IS NOT NULL",
     },
 )
 write(
     weapon_attributes,
     "weapon_attributes",
-    "Parametry broni z arkusza Raw Values datasetu Kaggle.",
+    "Weapon parameters from the Kaggle dataset Raw Values sheet.",
 )

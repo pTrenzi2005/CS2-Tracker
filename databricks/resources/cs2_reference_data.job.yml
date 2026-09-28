@@ -55,11 +55,18 @@ resources:
             notebook_path: ../batch/silver_reference_data.py
 
         - task_key: gold
-          description: Wymiary danych wsadowych i kontrola spojnosci kluczy.
+          description: Wymiary danych wsadowych.
           depends_on:
             - task_key: silver
           notebook_task:
             notebook_path: ../batch/gold_reference_data.py
+
+        - task_key: validate
+          description: Unikalnosc kluczy i spojnosc mapa, poziom, strefa.
+          depends_on:
+            - task_key: gold
+          notebook_task:
+            notebook_path: ../batch/validate_reference_data.py
 
       queue:
         enabled: true

@@ -1,7 +1,11 @@
-"""Gold: wymiary schematu gwiazdy.
-
-Klucze surogatowe liczymy funkcjami skrotu z kluczy naturalnych, wiec sa
-stabilne przy kazdym pelnym przeliczeniu widokow i nie wymagaja sekwencerow.
+"""
+Gold: star-schema dimensions.
+Keys are hashes of natural keys, so full recomputes stay stable.
+- `gold.dim_player` — one row per player
+- `gold.dim_map` — one row per map seen in telemetry
+- `gold.dim_weapon` — one row per weapon seen in inventory
+- `gold.dim_round` — one row per round
+- `gold.dim_match` — one row per match
 """
 
 from pyspark import pipelines as dp
@@ -17,7 +21,7 @@ ROUND_STATE = f"{CATALOG}.silver.round_player_state"
 
 @dp.materialized_view(
     name=f"{CATALOG}.gold.dim_player",
-    comment="Gracz z zamaskowanym SteamID64 zgodnie z polityka prywatnosci.",
+    comment="Player with SteamID64 masked.",
     table_properties={"quality": "gold"},
 )
 def gold_dim_player():
@@ -32,7 +36,7 @@ def gold_dim_player():
         )
         .select(
             F.sha2(F.col("steamid"), 256).alias("player_key"),
-            # Surowy SteamID64 nie opuszcza warstwy Silver.
+            # Raw SteamID64 stays in silver.
             F.concat(F.substring(F.col("steamid"), 1, 8), F.lit("*********")).alias(
                 "steamid_masked"
             ),
@@ -46,7 +50,7 @@ def gold_dim_player():
 
 @dp.materialized_view(
     name=f"{CATALOG}.gold.dim_map",
-    comment="Mapy widziane w telemetrii; punkt podpiecia metadanych wsadowych.",
+    comment="Maps seen in telemetry. Join point for reference metadata.",
     table_properties={"quality": "gold"},
 )
 def gold_dim_map():
@@ -68,7 +72,7 @@ def gold_dim_map():
 
 @dp.materialized_view(
     name=f"{CATALOG}.gold.dim_weapon",
-    comment="Bronie widziane w ekwipunku; punkt podpiecia cennika i statystyk.",
+    comment="Weapons seen in inventory. Join point for price and stats.",
     table_properties={"quality": "gold"},
 )
 def gold_dim_weapon():
@@ -104,7 +108,7 @@ def gold_dim_weapon():
 
 @dp.materialized_view(
     name=f"{CATALOG}.gold.dim_round",
-    comment="Runda z wynikiem, ekonomia startowa i czasem trwania.",
+    comment="Round with result, starting economy, and duration.",
     cluster_by=["match_id"],
     table_properties={"quality": "gold"},
 )
@@ -146,9 +150,7 @@ def gold_dim_round():
     )
 
     player_team = F.coalesce("team_at_start", "team_at_end", "team_from_ticks")
-    # GSI wysyla round_start jeszcze w freezetime, czyli przed zakupami - equip
-    # z tego pakietu to zwykle sam noz (200). O typie rundy decyduje pelny
-    # ekwipunek, jaki gracz mial w jej trakcie.
+    # round_start arrives in freeze time, before buys. Round type uses peak equip value.
     equip = F.col("equip_value_max")
     by_match = Window.partitionBy("match_id").orderBy("round_number")
     return (
@@ -156,9 +158,7 @@ def gold_dim_round():
         .join(state, ["match_id", "round_number"], "left")
         .withColumn("player_team", player_team)
         .withColumn("map_name", F.coalesce("map_name_start", "map_name_end"))
-        # Pistolowka to pierwsza runda polowy. Zmiane stron poznajemy po zmianie
-        # druzyny gracza, wiec regula dziala tak samo dla MR12 i dla wingmana,
-        # gdzie polowa konczy sie po rundzie 7, a nie po 11.
+        # Pistol round is round 0 or the first round after a side swap. Works for MR12 and wingman.
         .withColumn(
             "is_pistol_round",
             F.coalesce(
@@ -202,7 +202,7 @@ def gold_dim_round():
 
 @dp.materialized_view(
     name=f"{CATALOG}.gold.dim_match",
-    comment="Mecz z bilansem rund naszego gracza.",
+    comment="Match with our player's round record.",
     table_properties={"quality": "gold"},
 )
 def gold_dim_match():
@@ -213,9 +213,7 @@ def gold_dim_match():
         F.sum(F.when(F.col("player_survived"), 1).otherwise(0)).alias("rounds_survived"),
         F.min("round_start_ts").alias("first_round_ts"),
         F.max("round_end_ts").alias("last_round_ts"),
-        # Tablica wynikow z GSI zmienia znaczenie po zmianie stron, a snapshot
-        # z ostatniej rundy nie obejmuje jej samej. Liczba rund wygranych przez
-        # kazda ze stron jest jednoznaczna i zawsze sumuje sie do rounds_played.
+        # The scoreboard flips after a side swap and the last snapshot excludes that round.
         F.sum(F.when(F.col("win_team") == "CT", 1).otherwise(0)).alias("rounds_won_ct_side"),
         F.sum(F.when(F.col("win_team") == "T", 1).otherwise(0)).alias("rounds_won_t_side"),
         F.expr("min_by(map_name, round_number)").alias("map_name"),

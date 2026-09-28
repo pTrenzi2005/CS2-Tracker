@@ -1,7 +1,11 @@
-"""Gold: tabele faktow schematu gwiazdy pod dashboardy analityczne.
-
-``fact_player_positions`` ma ziarno pojedynczego ticku i sluzy do odtwarzania
-sciezki gracza w rundzie. Pozostale fakty maja ziarno zdarzenia albo rundy.
+"""
+Gold: star-schema facts.
+- `gold.fact_player_positions` — one row per tick
+- `gold.fact_kills` — one row per kill sample
+- `gold.fact_deaths` — one row per death
+- `gold.fact_damage` — one row per damage delta
+- `gold.fact_round_stats` — one row per round and player
+- `gold.agg_match_summary` — one row per match and player
 """
 
 from pyspark import pipelines as dp
@@ -30,7 +34,7 @@ def with_keys(df, weapon_column: str | None = None):
 
 
 def with_time_in_round(df):
-    """Dokleja sekundy od poczatku rundy - os czasu dla kazdego dashboardu."""
+    """Seconds since round start."""
     rounds = spark.read.table(DIM_ROUND).select("match_id", "round_number", "round_start_ts")
     return (
         df.join(rounds, ["match_id", "round_number"], "left")
@@ -46,7 +50,7 @@ def with_time_in_round(df):
 
 @dp.materialized_view(
     name=f"{CATALOG}.gold.fact_player_positions",
-    comment="Ziarno: tick. Sciezka gracza w rundzie razem ze stanem i bronia.",
+    comment="Grain: tick. Player path in the round, with state and weapon.",
     cluster_by=["match_id", "round_number"],
     table_properties={"quality": "gold"},
 )
@@ -84,7 +88,7 @@ def gold_fact_player_positions():
 
 @dp.materialized_view(
     name=f"{CATALOG}.gold.fact_kills",
-    comment="Ziarno: zdarzenie zabojstwa. Miejsce, bron i moment w rundzie.",
+    comment="Grain: kill event. Place, weapon, and time in the round.",
     cluster_by=["match_id"],
     table_properties={"quality": "gold"},
 )
@@ -114,7 +118,7 @@ def gold_fact_kills():
 
 @dp.materialized_view(
     name=f"{CATALOG}.gold.fact_deaths",
-    comment="Ziarno: smierc gracza w rundzie. Miejsce i przezyty czas.",
+    comment="Grain: player death in a round. Place and time alive.",
     cluster_by=["match_id"],
     table_properties={"quality": "gold"},
 )
@@ -142,7 +146,7 @@ def gold_fact_deaths():
 
 @dp.materialized_view(
     name=f"{CATALOG}.gold.fact_damage",
-    comment="Ziarno: przyrost obrazen zadanych lub otrzymanych.",
+    comment="Grain: damage dealt or taken.",
     cluster_by=["match_id"],
     table_properties={"quality": "gold"},
 )
@@ -170,7 +174,7 @@ def gold_fact_damage():
 
 @dp.materialized_view(
     name=f"{CATALOG}.gold.fact_round_stats",
-    comment="Ziarno: runda x gracz. Podstawa dla K/D, ADR i procentu przezyc.",
+    comment="Grain: round and player. Source for K/D, ADR, and survival rate.",
     cluster_by=["match_id"],
     table_properties={"quality": "gold"},
 )
@@ -211,10 +215,7 @@ def gold_fact_round_stats():
             ),
         )
     )
-    # Ticki urywaja sie w chwili smierci, bo kamera przechodzi na kolege z
-    # druzyny. Liczniki ze zdarzenia round_end pochodza z ostatniego pakietu
-    # rundy, wiec obejmuja rowniez to, co wydarzylo sie po ostatnim ticku, i to
-    # one sa tu zrodlem prawdy dla sum.
+    # Ticks stop at death. round_end still has the final counters.
     final_state = (
         spark.read.table(ROUND_EVENTS)
         .filter(F.col("event_type") == "round_end")
@@ -258,8 +259,7 @@ def gold_fact_round_stats():
             F.greatest(F.col("final_headshots"), F.col("headshot_kills"), F.col("round_killhs")),
             F.lit(0),
         ).alias("headshot_kills"),
-        # Zabojstwa, dla ktorych mamy tick, a wiec i pozycje na mapie. Roznica
-        # wobec kolumny kills to zabojstwa z samej koncowki rundy.
+        # Kills that have a tick, and therefore a map position.
         F.coalesce(F.col("kills"), F.lit(0)).alias("kills_with_position"),
         F.when(F.col("death_ts").isNotNull(), 1).otherwise(0).alias("deaths"),
         F.coalesce(
@@ -277,7 +277,7 @@ def gold_fact_round_stats():
 
 @dp.materialized_view(
     name=f"{CATALOG}.gold.agg_match_summary",
-    comment="Ziarno: mecz x gracz. Gotowe KPI na kafelki dashboardu.",
+    comment="Grain: match and player. Dashboard KPIs.",
     table_properties={"quality": "gold"},
 )
 def gold_agg_match_summary():

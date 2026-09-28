@@ -1,9 +1,8 @@
-"""Silver: zdarzenia cyklu zycia rundy i meczu.
-
-Strumien niskiej czestotliwosci, ale bez niego warstwa Gold nie zna zwyciezcy
-rundy: ``win_team`` pojawia sie w GSI wylacznie w fazie ``over``, ktora nie
-trafia do ticku, a bywaja rundy, w ktorych zaden pakiet z ta faza nie dotyczy
-juz naszego gracza.
+"""
+Silver: round and match lifecycle events.
+`silver.round_events` — round start and end, including the winner.
+`silver.match_events` — match open and close.
+`win_team` arrives only in the `over` phase, which is not a tick.
 """
 
 from pyspark import pipelines as dp
@@ -19,12 +18,12 @@ def coordinate(column, index):
 
 @dp.table(
     name=f"{CATALOG}.silver.round_events",
-    comment="Poczatki i konce rund wraz ze zwyciezca oraz stanem gracza.",
+    comment="Round start and end, with the winner and player state.",
     cluster_by=["match_id", "round_number"],
     table_properties={"quality": "silver"},
 )
-@dp.expect_all_or_drop({"numer_rundy_nieujemny": "round_number >= 0"})
-@dp.expect_all({"koniec_rundy_ma_zwyciezce": "event_type <> 'round_end' OR win_team IN ('CT', 'T')"})
+@dp.expect_all_or_drop({"non_negative_round": "round_number >= 0"})
+@dp.expect_all({"round_end_has_winner": "event_type <> 'round_end' OR win_team IN ('CT', 'T')"})
 def silver_round_events():
     return (
         spark.readStream.table(PARSED_TABLE)
@@ -67,7 +66,7 @@ def silver_round_events():
 
 @dp.table(
     name=f"{CATALOG}.silver.match_events",
-    comment="Otwarcie i zamkniecie meczu wykryte po stronie klienta GSI.",
+    comment="Match open and close detected by the GSI client.",
     cluster_by=["match_id"],
     table_properties={"quality": "silver"},
 )

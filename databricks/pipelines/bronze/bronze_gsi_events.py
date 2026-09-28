@@ -1,11 +1,6 @@
-"""Bronze: surowy zrzut zdarzen GSI z Azure Event Hubs.
-
-Tabela nie zmienia tresci wiadomosci - JSON ladnie w kolumnie tekstowej razem
-z metadanymi Kafki, dzieki czemu kazda pozniejsza warstwa da sie odtworzyc od
-zera z historii.
-
-Event Hubs musi byc w warstwie Standard albo wyzszej: warstwa Basic nie
-udostepnia endpointu Kafka, z ktorego czyta ten potok.
+"""
+Bronze: raw GSI events from Azure Event Hubs.
+`bronze.gsi_raw_events` — one row per Kafka message. The payload stays as text.
 """
 
 from pyspark import pipelines as dp
@@ -38,7 +33,7 @@ KAFKA_OPTIONS = {
 
 @dp.table(
     name=f"{CATALOG}.bronze.gsi_raw_events",
-    comment="Surowe zdarzenia GSI z Event Hubs, bez modyfikacji tresci.",
+    comment="Raw GSI events from Event Hubs. Payload is unchanged.",
     cluster_by=["ingest_date"],
     table_properties={"quality": "bronze"},
 )

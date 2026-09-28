@@ -2,14 +2,15 @@
 # MAGIC %md
 # MAGIC # Reference data (2/4) - Bronze
 # MAGIC
-# MAGIC Volume -> tabele. Tresc plikow nie jest modyfikowana: pliki tekstowe laduja w kolumnie
-# MAGIC `raw_content` / `raw_line`, obrazy opisujemy samymi metadanymi (sciezka, rozmiar, hash).
-# MAGIC Kazdy wiersz niesie `ingest_run_id`, wiec tabele sa append-only i trzymaja historie
-# MAGIC kolejnych snapshotow - po patchu Valve wystarczy odpalic Joba jeszcze raz.
+# MAGIC Append-only bronze tables for ingest snapshot (`ingest_run_id`):
+# MAGIC - `bronze.map_icons_raw` — map manifest and radar overview text
+# MAGIC - `bronze.weapon_spreadsheet_raw` — weapon spreadsheet lines
+# MAGIC - `bronze.map_assets_raw` — map image metadata (path, size, hash)
+# MAGIC
 
 # COMMAND ----------
 
-dbutils.widgets.text("catalog", "cs2_dev", "Katalog Unity Catalog")
+dbutils.widgets.text("catalog", "cs2_dev", "Unity Catalog")
 
 # COMMAND ----------
 
@@ -22,15 +23,13 @@ from pyspark.sql.window import Window
 CATALOG = dbutils.widgets.get("catalog")
 ROOT = f"/Volumes/{CATALOG}/bronze/raw"
 
-# Job przekazuje id przebiegu przez taskValues; przy recznym uruchomieniu notebooka
-# bierzemy wskaznik zapisany obok manifestow.
+#identyfing the ingest run id
 INGEST_RUN_ID = dbutils.jobs.taskValues.get(taskKey="Download_data", key="ingest_run_id", debugValue="")
 if not INGEST_RUN_ID:
     with open(f"{ROOT}/_manifest/latest.json", "r", encoding="utf-8") as handle:
         INGEST_RUN_ID = json.load(handle)["ingest_run_id"]
 
 MANIFEST_PATH = f"{ROOT}/_manifest/{INGEST_RUN_ID}.json"
-print(f"ingest_run_id={INGEST_RUN_ID}")
 
 # COMMAND ----------
 
@@ -59,17 +58,12 @@ manifest = (
     .select("ingest_run_id", "downloaded_at", "source_ref", "source_commit", "file.*")
 )
 
-print(f"pozycji w manifescie: {manifest.count()}")
-display(manifest.groupBy("source_system", "artifact_type").count())
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## `bronze.map_icons_raw` - manifest map i pliki overview
+# MAGIC ## `bronze.map_icons_raw` - maps manifest and radar overview info
 # MAGIC
-# MAGIC Jeden wiersz na plik tekstowy. `available.json` idzie w calosci, kazdy
-# MAGIC `radar_info/<map>.txt` osobno. Klucz zlaczenia z manifestem to nazwa pliku -
-# MAGIC jest unikalna w obrebie snapshotu.
 
 # COMMAND ----------
 
@@ -85,41 +79,35 @@ text_files = (
     )
 )
 
-map_icons_raw = manifest.filter(
-    F.col("artifact_type").isin("map_manifest", "radar_info")
-).join(text_files, "file_name", "inner").select(
-    "ingest_run_id",
-    "downloaded_at",
-    "source_system",
-    "artifact_type",
-    "map_name",
-    "source_url",
-    "source_ref",
-    "source_commit",
-    "volume_path",
-    "file_name",
-    "raw_content",
-    "content_sha256",
-    "size_bytes",
-)
+map_icons_raw = manifest.filter(F.col("artifact_type").isin("map_manifest", "radar_info"))
+    .join(text_files, "file_name", "inner")
+        .select(
+            "ingest_run_id",
+            "downloaded_at",
+            "source_system",
+            "artifact_type",
+            "map_name",
+            "source_url",
+            "source_ref",
+            "source_commit",
+            "volume_path",
+            "file_name",
+            "raw_content",
+            "content_sha256",
+            "size_bytes",
+        )
 
 (
     map_icons_raw.write.mode("append")
     .option("mergeSchema", "true")
     .saveAsTable(f"{CATALOG}.bronze.map_icons_raw")
 )
-print(f"bronze.map_icons_raw: +{map_icons_raw.count()} wierszy")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## `bronze.weapon_spreadsheet_raw` - linie arkusza broni
+# MAGIC ## `bronze.weapon_spreadsheet_raw` - weapon spreadsheet with statictics
 # MAGIC
-# MAGIC Arkusz to eksport z Google Sheets: bloki broni rozdzielone pustymi wierszami, a nad
-# MAGIC kazdym blokiem powtorzony naglowek z nazwa kategorii w pierwszej kolumnie. Dlatego
-# MAGIC **kolejnosc linii jest znaczaca** i numer linii musi przetrwac do warstwy Silver.
-# MAGIC Pliki maja po kilkanascie kB, czyli jedna partycje - w jej obrebie
-# MAGIC `monotonically_increasing_id()` rosnie zgodnie z kolejnoscia czytania z pliku.
 
 # COMMAND ----------
 
@@ -136,58 +124,55 @@ weapon_lines = (
     .drop("_read_order")
 )
 
-weapon_spreadsheet_raw = manifest.filter(F.col("artifact_type") == "weapon_csv").join(
-    weapon_lines, "file_name", "inner"
-).select(
-    "ingest_run_id",
-    "downloaded_at",
-    "source_system",
-    "source_url",
-    "source_file_name",
-    "volume_path",
-    "file_name",
-    "line_number",
-    "raw_line",
-    "content_sha256",
-)
+weapon_spreadsheet_raw = manifest.filter(F.col("artifact_type") == "weapon_csv")
+    .join(weapon_lines, "file_name", "inner")
+        .select(
+            "ingest_run_id",
+            "downloaded_at",
+            "source_system",
+            "source_url",
+            "source_file_name",
+            "volume_path",
+            "file_name",
+            "line_number",
+            "raw_line",
+            "content_sha256",
+        )
 
 (
     weapon_spreadsheet_raw.write.mode("append")
     .option("mergeSchema", "true")
     .saveAsTable(f"{CATALOG}.bronze.weapon_spreadsheet_raw")
 )
-print(f"bronze.weapon_spreadsheet_raw: +{weapon_spreadsheet_raw.count()} wierszy")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## `bronze.map_assets_raw` - katalog obrazow
+# MAGIC ## `bronze.map_assets_raw` - holds map assets metadata (path, size, hash)
 # MAGIC
-# MAGIC Same metadane. Bajty PNG zostaja w Volume, tabela trzyma sciezke, rozmiar i hash,
-# MAGIC zeby warstwa Gold mogla podac dashboardowi gotowa sciezke do tla heatmapy.
 
 # COMMAND ----------
 
-map_assets_raw = manifest.filter(F.col("artifact_type") == "map_image").select(
-    "ingest_run_id",
-    "downloaded_at",
-    "map_name",
-    F.when(F.col("volume_path").contains("/radars/"), "radar")
-    .otherwise("icon")
-    .alias("asset_type"),
-    F.col("asset_variant").alias("asset_variant"),
-    "source_url",
-    "source_ref",
-    "source_commit",
-    "volume_path",
-    "file_name",
-    "content_sha256",
-    "size_bytes",
-)
+map_assets_raw = manifest.filter(F.col("artifact_type") == "map_image")
+    .select(
+        "ingest_run_id",
+        "downloaded_at",
+        "map_name",
+        F.when(F.col("volume_path").contains("/radars/"), "radar")
+        .otherwise("icon")
+        .alias("asset_type"),
+        F.col("asset_variant").alias("asset_variant"),
+        "source_url",
+        "source_ref",
+        "source_commit",
+        "volume_path",
+        "file_name",
+        "content_sha256",
+        "size_bytes",
+    )
 
 (
     map_assets_raw.write.mode("append")
     .option("mergeSchema", "true")
     .saveAsTable(f"{CATALOG}.bronze.map_assets_raw")
 )
-print(f"bronze.map_assets_raw: +{map_assets_raw.count()} wierszy")

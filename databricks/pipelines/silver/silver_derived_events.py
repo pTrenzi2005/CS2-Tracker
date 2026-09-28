@@ -1,13 +1,10 @@
-"""Silver: zdarzenia wyliczone z roznic miedzy kolejnymi tickami.
-
-GSI nie wysyla zdarzen typu "zabojstwo" ani "obrazenia" - wysyla stan. Zabicie
-poznajemy po wzroscie licznika ``round_kills``, smierc po zejsciu zycia do
-zera, obrazenia po zmianie ``round_totaldmg``.
-
-Te tabele sa materialized view, a nie streaming table, i jest to swiadome:
-``lag()`` wymaga uporzadkowania calej partycji, czego nie da sie policzyc
-przyrostowo na strumieniu dopisywanym. Przy skali jednego meczu (kilkanascie
-tysiecy tickow) pelne przeliczenie jest tanie.
+"""
+Silver: events derived from tick deltas.
+GSI sends state, not kill or damage events. These are materialized views because `lag()` needs the full partition.
+- `silver.kill_events` — ticks where the kill counter increased
+- `silver.death_events` — one death per round
+- `silver.damage_events` — damage dealt and taken
+- `silver.round_player_state` — tick summary per round
 """
 
 from pyspark import pipelines as dp
@@ -22,7 +19,6 @@ BY_ROUND = Window.partitionBy("match_id", "round_number").orderBy("seq")
 
 
 def ticks_with_deltas():
-    """Ticki wzbogacone o wartosci z poprzedniej probki."""
     return (
         spark.read.table(TICKS_TABLE)
         .withColumn("prev_round_kills", F.lag("round_kills").over(BY_ROUND))
@@ -32,18 +28,15 @@ def ticks_with_deltas():
         .withColumn("prev_pos_x", F.lag("pos_x").over(BY_ROUND))
         .withColumn("prev_pos_y", F.lag("pos_y").over(BY_ROUND))
         .withColumn("prev_pos_z", F.lag("pos_z").over(BY_ROUND))
-        # Kumulatywny licznik z match_stats tez porownujemy w obrebie rundy.
-        # Okno na poziomie meczu wykrywaloby zabojstwa z ostatnich ulamkow
-        # sekundy rundy, ale doklejaloby je do pierwszego ticku rundy
-        # nastepnej, czyli stawialoby na mapie punkt w miejscu respawnu.
-        # Komplet zabojstw dolicza fact_round_stats ze zdarzen round_end.
+        # A match-level window would attach a last-second kill to the next round's spawn.
+        # fact_round_stats adds those kills from round_end.
         .withColumn("prev_match_kills", F.lag("match_kills").over(BY_ROUND))
     )
 
 
 @dp.materialized_view(
     name=f"{CATALOG}.silver.kill_events",
-    comment="Ticki, w ktorych licznik zabojstw naszego gracza wzrosl.",
+    comment="Ticks where our player's kill counter increased.",
     table_properties={"quality": "silver"},
 )
 def silver_kill_events():
@@ -70,9 +63,6 @@ def silver_kill_events():
             "steamid",
             "map_name",
             "player_team",
-            # Przy probkowaniu co ~0.15 s dwa zabojstwa moga wpasc w jedna
-            # probke, dlatego zdarzenie niesie licznik zamiast udawac, ze
-            # zawsze opisuje dokladnie jedno zabojstwo.
             "kill_count",
             "headshot_count",
             F.col("active_weapon").alias("weapon_name"),
@@ -88,7 +78,7 @@ def silver_kill_events():
 
 @dp.materialized_view(
     name=f"{CATALOG}.silver.death_events",
-    comment="Smierc gracza w rundzie, zlozona z tickow i ze zdarzen konca rundy.",
+    comment="Player death in a round, from ticks and from round end.",
     table_properties={"quality": "silver"},
 )
 def silver_death_events():
@@ -112,8 +102,7 @@ def silver_death_events():
             F.lit("tick").alias("source"),
         )
     )
-    # Gdy zginiemy dokladnie na koniec rundy, ostatni tick moze juz nie
-    # dotrzec - stan koncowy zna wtedy tylko zdarzenie round_end.
+    # A death on the round boundary may never produce a tick.
     deaths_from_round_end = (
         spark.read.table(ROUND_EVENTS_TABLE)
         .filter((F.col("event_type") == "round_end") & (F.col("player_survived") == F.lit(False)))
@@ -139,8 +128,7 @@ def silver_death_events():
     )
     return (
         deaths_from_ticks.unionByName(deaths_from_round_end)
-        # W rundzie ginie sie najwyzej raz; tick opisuje smierc dokladniej niz
-        # podsumowanie rundy, wiec ma pierwszenstwo.
+        # At most one death per round. The tick is more precise than round_end.
         .withColumn("_rank", F.row_number().over(dedup))
         .filter(F.col("_rank") == 1)
         .drop("_rank")
@@ -149,7 +137,7 @@ def silver_death_events():
 
 @dp.materialized_view(
     name=f"{CATALOG}.silver.damage_events",
-    comment="Obrazenia zadane i otrzymane, wyliczone z przyrostow stanu.",
+    comment="Damage dealt and taken, derived from state deltas.",
     table_properties={"quality": "silver"},
 )
 def silver_damage_events():
@@ -181,8 +169,7 @@ def silver_damage_events():
             "damage",
         )
     )
-    # Obrazenia otrzymane liczymy ze spadku zycia, wiec nie obejmuja tej czesci,
-    # ktora pochlonal pancerz.
+    
     taken = (
         deltas.withColumn("damage", F.col("prev_health") - F.col("health"))
         .filter(F.col("prev_health").isNotNull() & (F.col("damage") > 0))
@@ -198,7 +185,7 @@ def silver_damage_events():
 
 @dp.materialized_view(
     name=f"{CATALOG}.silver.round_player_state",
-    comment="Podsumowanie tickow w obrebie rundy: czas, dystans, ekonomia.",
+    comment="Tick summary for a round: time, distance, and economy.",
     table_properties={"quality": "silver"},
 )
 def silver_round_player_state():
