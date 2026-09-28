@@ -1,82 +1,44 @@
-Dokument Projektowy: CS2 Analytics & AI Coach Platform
-## 1. Streszczenie Projektu
-Projekt "CS2 Analytics & AI Coach Platform" to w pełni zautomatyzowana, chmurowa platforma danych end-to-end, zbudowana w oparciu o ekosystem Databricks i Microsoft Azure. Głównym celem systemu jest pobieranie telemetrii z gry Counter-Strike 2 w czasie rzeczywistym, przetwarzanie jej zgodnie z architekturą Medallion (Bronze/Silver/Gold) oraz udostępnianie wyników za pomocą analitycznych dashboardów i asystenta AI (Trenera). Projekt demonstruje integrację danych strumieniowych i wsadowych, rygorystyczne zarządzanie dostępem (Unity Catalog) oraz wdrożenie typu "Infrastructure as Code" poprzez Databricks Asset Bundles i procesy CI/CD.
+# CS2 Tracker
 
-## 2. Architektura Danych i Źródła
-Platforma integruje dwa główne strumienie danych:
+Counter-Strike 2 match telemetry and static game reference data, in one Unity Catalog.
 
-### Dane Strumieniowe (Streaming Ingestion):
+A local server receives Game State Integration packets from the game and sends normalized events to Azure Event Hubs. A Databricks pipeline turns that stream into a star schema. A separate job loads map and weapon reference data. Facts join the reference dimensions on `map_key` and `weapon_key`. The two workloads do not share table ownership.
 
-Źródło: Counter-Strike 2 Game State Integration (GSI).
+| Path | What it is | Detail |
+| --- | --- | --- |
+| [`python/`](python/) | Local GSI server | [python/README.md](python/README.md) |
+| [`databricks/`](databricks/) | Lakeflow pipeline and reference-data job | [databricks/README.md](databricks/README.md) |
+| [`databricks.yml`](databricks.yml) | Asset bundle. Dev catalog `cs2_dev`, prod catalog `cs2_prod` | |
 
-Mechanizm: Silnik gry generuje pliki JSON z telemetrią (np. współrzędne gracza, oddane strzały, otrzymane obrażenia, rzucone granaty). Lokalny skrypt Python nasłuchuje zdarzeń i bezpiecznie przesyła je za pomocą protokołu HTTPS do usługi Azure Event Hubs.
+## Data
 
-### Dane Wsadowe (Batch Ingestion):
+**Match telemetry.** The game posts JSON to `http://127.0.0.1:3000`. The server keeps our player's active round and emits `tick`, `match_start`, `round_start`, `round_end`, and `match_end`. GSI sends state, not kill or damage events. Those are derived later from counter changes between ticks. The Event Hubs connection string comes from Azure Key Vault.
 
-Źródło: Relacyjna baza danych (np. Azure SQL) lub statyczne pliki (CSV/JSON).
+**Reference data.** [MurkyYT/cs2-map-icons](https://github.com/MurkyYT/cs2-map-icons) supplies radar transforms, altitude levels, plant zones, and images. The [Kaggle weapon spreadsheet](https://www.kaggle.com/datasets/billpureskillgg/cs2-weapon-spreadsheet) supplies weapon stats. The job downloads both into the `bronze.raw` volume.
 
-Zawartość: Statyczne metadane dotyczące gry: parametry broni oraz topologia map (koordynaty stref plantowania bomby, respawnów), statystyki.
+## Medallion
 
-## 3. Przetwarzanie Danych (Architektura Medallion)
-Potoki danych są budowane w sposób deklaratywny (Lakeflow / Delta Live Tables) i gwarantują idempotentność oraz powtarzalność. Tabele przechowują pełną historię meczów i są partycjonowane po kluczu match_id.
+Both workloads use `bronze`, `silver`, and `gold` in the same catalog.
 
-### Warstwa Bronze (Surowe Dane):
+| Layer | Telemetry pipeline | Reference job |
+| --- | --- | --- |
+| Bronze | Raw Kafka payload, unchanged | Append-only snapshot of downloaded files, keyed by `ingest_run_id` |
+| Silver | Parsed events, ticks, round boundaries, and derived kills, deaths, and damage | One row per map, radar level, zone, and weapon. Latest snapshot, overwritten |
+| Gold | Star schema: player, map, weapon, round, and match dimensions, plus facts and a match summary | Reference dimensions only: radar bounds, levels, zones, and weapon specs |
 
-Błyskawiczny zrzut surowych wiadomości JSON bezpośrednio z Azure Event Hubs. Dane nie są w żaden sposób modyfikowane, co pozwala na pełne odtworzenie historii.
+The pipeline is triggered, not continuous. The reference job has no schedule. Run it again after a game update. Reference tables are written by the job, so they survive a pipeline rebuild.
 
-### Warstwa Silver (Oczyszczanie i Walidacja):
+Raw SteamID64 stays in silver. Gold stores `player_key` (`sha2` of the id) and a masked id. Pipeline secrets live in the Databricks secret scope `cs2tracker-secrets`, not in source.
 
-Spłaszczenie zagnieżdżonych struktur JSON.
+## Run
 
-Wyodrębnienie specyficznych zdarzeń do osobnych tabel (np. silver_damage_events, silver_grenade_throws, silver_player_movement).
+Create the catalog schemas and the `bronze.raw` volume once with [`databricks/01_architecture_setup.ipynb`](databricks/01_architecture_setup.ipynb).
 
-Data Quality: Implementacja kontraktów danych (expectations), np. odrzucanie rekordów z wartościami obrażeń poniżej zera lub z pustym identyfikatorem gracza.
+```bash
+databricks bundle validate -t dev
+databricks bundle deploy   -t dev
+databricks bundle run      cs2_medallion -t dev
+databricks bundle run      cs2_reference_data -t dev
+```
 
-### Warstwa Gold (Analityka i KPI):
-
-Tabele zoptymalizowane pod odczyt dla zapytań BI. Dimension tables, fact tables i aggregation tables.
-
-Agregacje na poziomie rundy i całego meczu: K/D Ratio, ADR (Average Damage per Round), % Headshotów itp.
-
-Łączenie z danymi wsadowymi (np. przypisanie nazwy i klasy broni na podstawie jej ID/nazwy z warstwy streamingowej).
-
-## 4. Wyzwalanie Zadań (REST API Automation)
-Zamiast przetwarzania wsadowego opartego wyłącznie na sztywnym harmonogramie (cron), system reaguje na zdarzenia:
-
-Po zakończeniu meczu użytkownik wywołuje endpoint Databricks REST API (np. POST /api/2.1/jobs/run-now), przekazując match_id.
-
-Żądanie to automatycznie wyzwala Lakeflow Job, który odświeża tylko najnowsze partycje danych (przechodząc przez Bronze -> Silver -> Gold) i aktualizuje raporty końcowe natychmiast po wyjściu z serwera.
-
-## 5. Aplikacja AI (AI Coach z wykorzystaniem RAG)
-Na szczycie warstwy analitycznej działa Agent AI, zbudowany w oparciu o architekturę Retrieval-Augmented Generation (RAG):
-
-Baza Wiedzy (Unstructured Data): Dokumentacja map, poradniki taktyczne, oficjalne "Patch Notes" od Valve wgrane jako pliki PDF/Markdown do Unity Catalog Volumes.
-
-Wektoryzacja: Teksty są dzielone na mniejsze fragmenty (chunking), wektoryzowane i przechowywane w usłudze Vector Search.
-
-Działanie: Gracz zadaje pytanie: "Dlaczego tak często ginę w pierwszej minucie na mapie Inferno?". Model odpytuje bazę SQL (Warstwa Gold), aby potwierdzić fakty (Agent Function Calling), a następnie zestawia je ze strategiami profesjonalistów z bazy wektorowej, generując spersonalizowaną, podpartą danymi poradę.
-
-## 6. Zarządzanie, Bezpieczeństwo i Governance
-Unity Catalog: Centralne zarządzanie całą platformą.
-
-Row-Level & Column-Level Security (RLS/CLS): Wprowadzenie polityk maskowania. Wrażliwe identyfikatory użytkowników (SteamID64) oraz adresy IP klientów są maskowane w warstwach Silver i Gold.
-
-Azure Key Vault: Żadne hasła, tokeny dostępowe do Event Hubs ani klucze API nie są przechowywane w kodzie źródłowym. Wszystkie sekrety (Secret Scopes) są pobierane w locie podczas uruchamiania klastrów.
-
-## 7. Środowiska, CI/CD i Databricks Asset Bundles
-Projekt wymusza pełną automatyzację ("nothing built by hand in PROD"):
-
-Środowiska: Wyraźny podział na środowisko deweloperskie (DEV) oraz płatne środowisko produkcyjne (PROD).
-
-Kod jako Infrastruktura (IaC): Wszystkie potoki, zadania, struktury tabel i ustawienia uprawnień są zdefiniowane w plikach konfiguracyjnych YAML (databricks.yml) w ramach Databricks Asset Bundles.
-
-Potok CI/CD: Kod przechowywany jest w repozytorium Git (GitHub/Azure DevOps). Wysłanie zmian (Push/Pull Request) do głównej gałęzi wyzwala systematyczne testy (unit testy logiki biznesowej, sprawdzenie jakości kodu). Po zaliczeniu testów pipeline automatycznie wykonuje databricks bundle deploy -t prod.
-
-## 8. Kluczowe Dostarczane Elementy (Deliverables)
-Repozytorium Git: Zawierające pełny kod PySpark/SQL, skrypt ingestii (GSI -> Event Hubs), pliki konfiguracyjne DABs oraz dokumentację (README.md).
-
-Działająca Infrastruktura: Przechodzący na zielono potok CI/CD wdrażający platformę na Azure bez interwencji manualnej.
-
-Dashboard Analityczny: Zbudowany w Databricks SQL, wyświetlający m.in. heatmapy i statystyki skuteczności z ostatnich meczów.
-
-Aplikacja AI: Funkcjonujący Agent RAG gotowy do odpowiadania na spersonalizowane pytania treningowe.
+The prod target host in [`databricks.yml`](databricks.yml) is a placeholder. Replace it before the first prod deploy. Start the local server from [`python/`](python/) after copying the GSI config into the game cfg directory.
