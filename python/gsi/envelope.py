@@ -1,4 +1,4 @@
-"""Normalizacja pakietow GSI i koperta zdarzenia wysylanego do Event Hubs."""
+"""Normalized GSI payloads and the event envelope sent to Event Hubs."""
 
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ COUNTDOWN_FIELDS = ("phase", "phase_ends_in")
 
 @dataclass(frozen=True)
 class GsiEvent:
-    """Zdarzenie rozpoznane przez tracker, jeszcze bez koperty transportowej."""
+    """A tracker event before the transport envelope is added."""
 
     event_type: str
     match_id: str
@@ -60,17 +60,15 @@ def _pick(source: dict[str, Any] | None, keys: Iterable[str]) -> dict[str, Any]:
 
 
 def _weapon_slot(key: str) -> int:
-    """``weapon_3`` -> ``3``; nieznane klucze ladują na koncu listy."""
     _, _, suffix = key.partition("_")
     return int(suffix) if suffix.isdigit() else 999
 
 
 def normalize_weapons(weapons: dict[str, Any] | None) -> list[dict[str, Any]]:
-    """Zamienia slownik ``weapon_0..weapon_N`` na tablice o stalym schemacie.
+    """Turn `weapon_0`..`weapon_N` into a fixed-schema array.
 
-    GSI zwraca bron jako obiekt o zmiennej liczbie kluczy, wiec kazdy pakiet
-    mialby inny ksztalt kolumny w Sparku. Tablica rekordow daje jeden schemat
-    niezaleznie od tego, ile broni gracz akurat trzyma.
+    GSI sends a dict with a changing set of keys. An array keeps one Spark schema
+    no matter how many weapons the player holds.
     """
     if not weapons:
         return []
@@ -100,16 +98,12 @@ def build_map_block(payload: Payload) -> dict[str, Any]:
 
 
 def build_player_snapshot(payload: Payload) -> dict[str, Any]:
-    """Stan naszego gracza bez pol nieuzywanych w analityce.
-
-    Pomijamy ``previously`` i ``added`` (delty, ktore i tak liczymy w Silver),
-    ``spectarget`` (po smierci wskazuje kogos innego) oraz ``paintkit``.
-    """
+    """Our player's state, without fields silver recomputes or cannot trust."""
+    
     player = payload.get("player") or {}
     weapons = normalize_weapons(player.get("weapons"))
     snapshot: dict[str, Any] = _pick(player, PLAYER_FIELDS)
     if "name" in snapshot:
-        # GSI escapuje nick jako encje HTML (``I&apos;m`` zamiast ``I'm``).
         snapshot["name"] = html.unescape(snapshot["name"])
     snapshot["state"] = _pick(player.get("state"), STATE_FIELDS)
     snapshot["match_stats"] = _pick(player.get("match_stats"), MATCH_STATS_FIELDS)
@@ -141,11 +135,10 @@ def utc_now_iso() -> str:
 
 
 class EnvelopeFactory:
-    """Nadaje zdarzeniom identyfikatory, kolejnosc i znacznik czasu klienta.
+    """Assigns ids, sequence, and a client timestamp.
 
-    ``provider.timestamp`` z GSI ma rozdzielczosc jednej sekundy, a przy
-    ustawionym throttle potrafi opisywac kilka pakietow naraz, wiec nie
-    porzadkuje zdarzen. Robi to ``seq`` razem z ``client_ts`` w milisekundach.
+    `provider.timestamp` has one-second resolution and can cover several packets,
+    so it does not order events. `seq` and millisecond `client_ts` do.
     """
 
     def __init__(self, session_id: str | None = None) -> None:

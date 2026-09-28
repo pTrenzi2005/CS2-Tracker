@@ -1,4 +1,4 @@
-"""Lokalny serwer Game State Integration: filtruje telemetrie CS2 i wysyla ja do Event Hubs."""
+"""Local Game State Integration server. Filters CS2 telemetry and sends it to Event Hubs."""
 
 import logging
 from collections import defaultdict
@@ -18,7 +18,7 @@ logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL.upper(), logging.INFO),
     format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
 )
-# SDK Azure na INFO wypisuje kazda probe logowania i kazde zadanie HTTP do Key Vault.
+
 logging.getLogger("azure").setLevel(logging.WARNING)
 log = logging.getLogger("gsi")
 
@@ -37,7 +37,7 @@ def build_sender() -> EventHubSender:
     )
 
 
-tracker = MatchTracker(idle_timeout_s=config.MATCH_IDLE_TIMEOUT_S)
+tracker = MatchTracker()
 envelopes = EnvelopeFactory()
 sender = build_sender()
 counters: dict[str, int] = defaultdict(int)
@@ -46,12 +46,12 @@ counters: dict[str, int] = defaultdict(int)
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await sender.start()
-    log.info("Serwer GSI nasluchuje na http://%s:%s", config.HOST, config.PORT)
+    log.info("GSI server listening on http://%s:%s", config.HOST, config.PORT)
     yield
     for event in tracker.finalize():
         sender.submit(envelopes.wrap(event))
     await sender.stop()
-    log.info("Podsumowanie: %s", dict(counters))
+    log.info("Summary: %s", dict(counters))
 
 
 app = FastAPI(lifespan=lifespan)
@@ -59,10 +59,9 @@ app = FastAPI(lifespan=lifespan)
 
 @app.post("/")
 async def gsi_endpoint(request: Request):
-    # Handler musi wrocic natychmiast: GSI czeka na odpowiedz blokujac watek gry.
     try:
         payload = await request.json()
-    except Exception:  # noqa: BLE001 - heartbeat bez ciala albo uszkodzony JSON
+    except Exception:
         counters["invalid"] += 1
         return {"status": "ignored"}
 
@@ -71,9 +70,9 @@ async def gsi_endpoint(request: Request):
         for event in tracker.process(payload):
             counters[event.event_type] += 1
             sender.submit(envelopes.wrap(event))
-    except Exception:  # noqa: BLE001 - blad przetwarzania nie moze zatrzymac gry
+    except Exception:
         counters["errors"] += 1
-        log.exception("Nie udalo sie przetworzyc pakietu GSI")
+        log.exception("Failed to process GSI packet")
 
     return {"status": "ok"}
 

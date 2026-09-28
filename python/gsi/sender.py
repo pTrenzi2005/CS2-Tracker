@@ -1,13 +1,6 @@
-"""Wysylka zdarzen do Azure Event Hubs poza sciezka zadania HTTP.
-
-GSI ma ``timeout 5.0`` i czeka na odpowiedz blokujac watek silnika gry, wiec
-wysylka synchroniczna w handlerze zamienia kazdy retry do Azure na zacinke w
-grze. Handler tylko odklada zdarzenie do kolejki, a pakowaniem w batche
-i ponawianiem zajmuje sie zadanie w tle.
-"""
+"""Event Hubs delivery off the HTTP request path."""
 
 from __future__ import annotations
-
 import asyncio
 import json
 import logging
@@ -48,14 +41,14 @@ class EventHubSender:
             conn_str=self._conn_string, eventhub_name=self._eventhub_name
         )
         self._worker = asyncio.create_task(self._run(), name="eventhub-sender")
-        log.info("Sender Event Hubs wystartowal (hub=%s)", self._eventhub_name)
+        log.info("Event Hubs sender started (hub=%s)", self._eventhub_name)
 
     def submit(self, envelope: dict[str, Any]) -> bool:
         try:
             self._queue.put_nowait(envelope)
         except asyncio.QueueFull:
             self.stats["dropped"] += 1
-            log.warning("Kolejka pelna, odrzucono zdarzenie %s", envelope.get("event_id"))
+            log.warning("Queue full, dropped event %s", envelope.get("event_id"))
             return False
         self.stats["queued"] += 1
         return True
@@ -68,7 +61,7 @@ class EventHubSender:
         if self._producer is not None:
             await self._producer.close()
             self._producer = None
-        log.info("Sender zatrzymany: %s", dict(self.stats))
+        log.info("Sender stopped: %s", dict(self.stats))
 
     @property
     def queue_size(self) -> int:
@@ -99,8 +92,7 @@ class EventHubSender:
     async def _flush(self, events: list[dict[str, Any]]) -> None:
         if not events:
             return
-        # Klucz partycji = match_id, dzieki czemu ticki jednego meczu
-        # trafiaja do jednej partycji i zachowuja kolejnosc.
+        # Partition on match_id so one match stays ordered on one partition.
         groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for envelope in events:
             groups[envelope.get("match_id") or "unknown"].append(envelope)
@@ -130,7 +122,7 @@ class EventHubSender:
                     batch.add(data)
                 except ValueError:
                     self.stats["oversized"] += 1
-                    log.error("Zdarzenie %s przekracza limit batcha", envelope.get("event_id"))
+                    log.error("Event %s exceeds the batch size limit", envelope.get("event_id"))
                     continue
             current.append(envelope)
         if current:
@@ -141,12 +133,12 @@ class EventHubSender:
         for attempt in range(1, self.max_retries + 1):
             try:
                 await self._producer.send_batch(batch)
-            except Exception as exc:  # noqa: BLE001 - kazdy blad transportu konczy sie odrzuceniem
-                log.warning("Wysylka batcha nieudana (proba %s/%s): %s", attempt, self.max_retries, exc)
+            except Exception as exc:
+                log.warning("Batch send failed (attempt %s/%s): %s", attempt, self.max_retries, exc)
                 await asyncio.sleep(min(0.5 * 2**attempt, 5.0))
             else:
                 self.stats["sent"] += len(events)
                 return True
         self.stats["lost"] += len(events)
-        log.error("Porzucono %s zdarzen po %s nieudanych probach", len(events), self.max_retries)
+        log.error("Dropped %s events after %s failed attempts", len(events), self.max_retries)
         return False

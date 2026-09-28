@@ -1,4 +1,4 @@
-"""Filtry decydujace, ktore pakiety GSI opisuja nas i aktywna rozgrywke."""
+"""Filters for packets that describe our player in an active round."""
 
 from typing import Any
 
@@ -14,13 +14,7 @@ def player_steamid(payload: Payload) -> str | None:
 
 
 def is_own_player(payload: Payload) -> bool:
-    """Czy blok ``player`` opisuje wlasciciela klienta gry.
-
-    Po smierci gra przelacza blok ``player`` na obserwowanego gracza: albo na
-    kamere swobodna (wtedy zostaje samo ``spectarget`` z id encji, bez
-    ``steamid``), albo na kompletny blok innego gracza, ktorego nic nie
-    odroznia od naszego poza wartoscia ``steamid``.
-    """
+    """Whether `player` is the client owner."""
     steamid = player_steamid(payload)
     return steamid is not None and steamid == provider_steamid(payload)
 
@@ -34,16 +28,11 @@ def round_phase(payload: Payload) -> str | None:
 
 
 def is_in_match(payload: Payload) -> bool:
-    """Czy gracz jest w meczu, a nie w menu lub na ekranie ladowania."""
     return payload.get("map") is not None
 
 
 def is_live_tick(payload: Payload) -> bool:
-    """Czy pakiet nadaje sie na tick wysokiej czestotliwosci.
-
-    Przepuszczamy wylacznie aktywna faze rundy: bez menu, warmupu, freezetime,
-    przerwy miedzy polowami i ekranu koncowego.
-    """
+    """Active round only."""
     return (
         is_own_player(payload)
         and map_phase(payload) == "live"
