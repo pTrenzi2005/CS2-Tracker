@@ -5,7 +5,9 @@ Two workloads share one Unity Catalog and one Asset Bundle. They do not share ta
 | Workload | What it is | When it runs |
 | --- | --- | --- |
 | GSI medallion pipeline | Lakeflow Declarative Pipeline `cs2_gsi_medallion` | After matches, on demand (`continuous: false`) |
-| Reference data job | Job `cs2_reference_data_ingest` | Once, then again after a game update |
+| Pipeline refresh job | Job `cs2_gsi_medallion_refresh`, one `pipeline_task` | RUN ANALYSIS in the app |
+| Reference data job | Job `cs2_reference_data_ingest` | Once, then again after a game update. RUN BATCH in the app |
+| App | Databricks App `cs2-tracker` on SQL warehouse `cs2-tracker-app` | See [`../dashboards/`](../dashboards/README.md) |
 
 The pipeline turns live match telemetry into a star schema. The job loads static map and weapon data and keeps its own gold dimensions. Facts join those dimensions on `map_key` and `weapon_key`.
 
@@ -33,7 +35,10 @@ databricks/
     telemetry_coverage.py        manual; not a job task
   resources/
     cs2_medallion.pipeline.yml
+    cs2_medallion_refresh.job.yml  app trigger for the pipeline
     cs2_reference_data.job.yml
+    cs2_tracker.app.yml            app, its jobs, warehouse, and Unity Catalog grants
+    cs2_tracker.sql_warehouse.yml
 ```
 
 `pipelines/` files are pipeline libraries. `batch/` files are Databricks notebooks.
@@ -165,6 +170,10 @@ The lag window is the round, not the match. A match-level window would pin a las
 | `gold.agg_match_summary` | Match and player | Match KPIs: K/D, ADR, headshot percent, survival percent |
 
 Ticks stop when the player dies, because the camera leaves them. `fact_kills`, `fact_deaths`, and `fact_damage` only contain samples that have a position, so they can miss the last fraction of a second. `fact_round_stats` takes the final counters from `round_end` and is the source of truth for round totals. `kills_with_position` is the part of those kills that can be drawn on a map.
+
+### Refresh job
+
+A Databricks App can be granted a job, not a pipeline. [`resources/cs2_medallion_refresh.job.yml`](resources/cs2_medallion_refresh.job.yml) wraps one incremental update (`full_refresh: false`) so the app can start it with `CAN_MANAGE_RUN`. The update runs as the pipeline owner, so the tables keep one owner. `max_concurrent_runs: 1` with a queue keeps a second click from overlapping the first.
 
 # Reference data job
 
