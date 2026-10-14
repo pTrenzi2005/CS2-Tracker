@@ -24,7 +24,7 @@ CATALOG = dbutils.widgets.get("catalog")
 ROOT = f"/Volumes/{CATALOG}/bronze/raw"
 
 #identyfing the ingest run id
-INGEST_RUN_ID = dbutils.jobs.taskValues.get(taskKey="Download_data", key="ingest_run_id", debugValue="")
+INGEST_RUN_ID = dbutils.jobs.taskValues.get(taskKey="download", key="ingest_run_id", debugValue="")
 if not INGEST_RUN_ID:
     with open(f"{ROOT}/_manifest/latest.json", "r", encoding="utf-8") as handle:
         INGEST_RUN_ID = json.load(handle)["ingest_run_id"]
@@ -79,23 +79,25 @@ text_files = (
     )
 )
 
-map_icons_raw = manifest.filter(F.col("artifact_type").isin("map_manifest", "radar_info"))
+map_icons_raw = (
+    manifest.filter(F.col("artifact_type").isin("map_manifest", "radar_info"))
     .join(text_files, "file_name", "inner")
-        .select(
-            "ingest_run_id",
-            "downloaded_at",
-            "source_system",
-            "artifact_type",
-            "map_name",
-            "source_url",
-            "source_ref",
-            "source_commit",
-            "volume_path",
-            "file_name",
-            "raw_content",
-            "content_sha256",
-            "size_bytes",
-        )
+    .select(
+        "ingest_run_id",
+        "downloaded_at",
+        "source_system",
+        "artifact_type",
+        "map_name",
+        "source_url",
+        "source_ref",
+        "source_commit",
+        "volume_path",
+        "file_name",
+        "raw_content",
+        "content_sha256",
+        "size_bytes",
+    )
+)
 
 (
     map_icons_raw.write.mode("append")
@@ -124,20 +126,22 @@ weapon_lines = (
     .drop("_read_order")
 )
 
-weapon_spreadsheet_raw = manifest.filter(F.col("artifact_type") == "weapon_csv")
+weapon_spreadsheet_raw = (
+    manifest.filter(F.col("artifact_type") == "weapon_csv")
     .join(weapon_lines, "file_name", "inner")
-        .select(
-            "ingest_run_id",
-            "downloaded_at",
-            "source_system",
-            "source_url",
-            "source_file_name",
-            "volume_path",
-            "file_name",
-            "line_number",
-            "raw_line",
-            "content_sha256",
-        )
+    .select(
+        "ingest_run_id",
+        "downloaded_at",
+        "source_system",
+        "source_url",
+        "source_file_name",
+        "volume_path",
+        "file_name",
+        "line_number",
+        "raw_line",
+        "content_sha256",
+    )
+)
 
 (
     weapon_spreadsheet_raw.write.mode("append")
@@ -153,7 +157,8 @@ weapon_spreadsheet_raw = manifest.filter(F.col("artifact_type") == "weapon_csv")
 
 # COMMAND ----------
 
-map_assets_raw = manifest.filter(F.col("artifact_type") == "map_image")
+map_assets_raw = (
+    manifest.filter(F.col("artifact_type") == "map_image")
     .select(
         "ingest_run_id",
         "downloaded_at",
@@ -170,6 +175,7 @@ map_assets_raw = manifest.filter(F.col("artifact_type") == "map_image")
         "content_sha256",
         "size_bytes",
     )
+)
 
 (
     map_assets_raw.write.mode("append")

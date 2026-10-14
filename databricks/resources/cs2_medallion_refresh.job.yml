@@ -1,0 +1,21 @@
+# Paths are relative to this file.
+# Apps can bind a job, not a pipeline. The app starts this job to refresh the pipeline.
+
+resources:
+  jobs:
+    cs2_medallion_refresh:
+      name: cs2_gsi_medallion_refresh
+      description: >-
+        One incremental update of the GSI medallion pipeline: new Event Hubs
+        messages through bronze, silver, and gold. Started from the app after a match.
+      max_concurrent_runs: 1
+
+      tasks:
+        - task_key: refresh
+          description: Incremental pipeline update. Tables stay owned by the pipeline.
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.cs2_medallion.id}
+            full_refresh: false
+
+      queue:
+        enabled: true

@@ -1,0 +1,10 @@
+# Minimums only: pip picks versions that match the Python of the Apps runtime.
+databricks-sdk>=0.40.0
+databricks-sql-connector[pyarrow]>=4.0.0
+matplotlib>=3.8
+numpy>=1.26
+pandas>=2.1
+pillow>=10.0
+requests>=2.31
+seaborn>=0.13
+streamlit>=1.46
