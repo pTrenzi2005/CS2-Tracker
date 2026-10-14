@@ -1,4 +1,4 @@
-"""Unity Catalog reads through the app's SQL warehouse, and radar images from the bronze volume."""
+"""Unity Catalog reads through the app's SQL warehouse, radar images from the bronze volume, and map thumbnails."""
 
 import os
 from io import BytesIO
@@ -87,8 +87,18 @@ def radar_image(map_name: str, radar_urls: tuple[str, ...]) -> Image.Image | Non
             return Image.open(BytesIO(content))
         except Exception:
             pass
+    return _download_image(target_url)
+
+
+@st.cache_data(show_spinner=False)
+def thumbnail_image(thumb_urls: tuple[str, ...]) -> Image.Image | None:
+    """First listed map thumbnail. The reference job keeps no volume copy, so it comes from the source URL."""
+    return _download_image(thumb_urls[0]) if thumb_urls else None
+
+
+def _download_image(url: str) -> Image.Image | None:
     try:
-        resp = requests.get(target_url, timeout=10)
+        resp = requests.get(url, timeout=10)
         if resp.status_code == 200:
             return Image.open(BytesIO(resp.content))
     except Exception:

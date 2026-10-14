@@ -9,11 +9,11 @@ dashboards/
   app.py              Entry point and page navigation
   app.yaml            Start command and environment, resolved from app resources
   requirements.txt
-  data.py             SQL warehouse queries, table names, radar images
+  data.py             SQL warehouse queries, table names, radar images, map thumbnails
   runs.py             Start and read job runs
   views/
     home.py           RUN BATCH, RUN ANALYSIS, latest match
-    analysis.py       Radar overlays, momentum, combat, round log, match history
+    analysis.py       Single page: radar overlays, match overview, momentum and economy, round pacing, round log
 ```
 
 The app is defined in [`../databricks/resources/cs2_tracker.app.yml`](../databricks/resources/cs2_tracker.app.yml) and deploys with the bundle. The GSI server is not part of it. It keeps running next to the game, see [`../python/`](../python/).
@@ -42,7 +42,7 @@ Queries run on the `cs2-tracker-app` serverless warehouse. Each table the app re
 
 Match ids, rounds, and sides are bound as named parameters, not formatted into SQL. Query results are cached for 10 minutes. A finished run clears the cache.
 
-Radar images come from the volume copy that the reference job downloads (`gold.dim_map_level.radar_volume_path`). If that file is missing, the app falls back to the source URL.
+Radar images come from the volume copy that the reference job downloads (`gold.dim_map_level.radar_volume_path`). If that file is missing, the app falls back to the source URL. Map thumbnails in the analysis header have no volume copy and always load from `gold.dim_map_reference.thumb_urls`.
 
 # Run locally
 
