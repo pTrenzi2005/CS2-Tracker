@@ -1,6 +1,6 @@
 # Paths are relative to this file.
-# Every table below must exist before the first deploy of the app.
-# Run cs2_medallion and cs2_reference_data once on a new catalog, then deploy again.
+# SELECT on gold comes from the schema grant in cs2_catalog.uc.yml, so tables need not exist when the app deploys.
+# config replaces app.yaml: the catalog differs per target, and app.yaml cannot read bundle variables.
 
 resources:
   apps:
@@ -9,14 +9,26 @@ resources:
       description: Starts the reference batch and the match analysis, then shows the match dashboards.
       source_code_path: ../../dashboards
 
-      # Keys are the valueFrom names in dashboards/app.yaml.
-      # Table and volume resources also grant USE CATALOG and USE SCHEMA.
+      config:
+        command: ["streamlit", "run", "app.py"]
+        env:
+          - name: STREAMLIT_GATHER_USAGE_STATS
+            value: "false"
+          - name: CS2_CATALOG
+            value: ${var.catalog}
+          - name: DATABRICKS_WAREHOUSE_ID
+            value_from: sql-warehouse
+          - name: CS2_REFERENCE_JOB_ID
+            value_from: reference-job
+          - name: CS2_ANALYSIS_JOB_ID
+            value_from: analysis-job
+
+      # Volume resources also grant USE CATALOG and USE SCHEMA.
       resources:
         - name: sql-warehouse
           sql_warehouse:
             id: ${resources.sql_warehouses.cs2_app_warehouse.id}
             permission: CAN_USE
-
         - name: reference-job
           job:
             id: ${resources.jobs.cs2_reference_data.id}
@@ -25,66 +37,8 @@ resources:
           job:
             id: ${resources.jobs.cs2_medallion_refresh.id}
             permission: CAN_MANAGE_RUN
-
         - name: raw-volume
           uc_securable:
             securable_type: VOLUME
-            securable_full_name: ${var.catalog}.bronze.raw
+            securable_full_name: ${resources.volumes.raw.catalog_name}.${resources.volumes.raw.schema_name}.${resources.volumes.raw.name}
             permission: READ_VOLUME
-
-        - name: dim-match
-          uc_securable:
-            securable_type: TABLE
-            securable_full_name: ${var.catalog}.gold.dim_match
-            permission: SELECT
-        - name: dim-round
-          uc_securable:
-            securable_type: TABLE
-            securable_full_name: ${var.catalog}.gold.dim_round
-            permission: SELECT
-        - name: agg-match-summary
-          uc_securable:
-            securable_type: TABLE
-            securable_full_name: ${var.catalog}.gold.agg_match_summary
-            permission: SELECT
-        - name: fact-round-stats
-          uc_securable:
-            securable_type: TABLE
-            securable_full_name: ${var.catalog}.gold.fact_round_stats
-            permission: SELECT
-        - name: fact-player-positions
-          uc_securable:
-            securable_type: TABLE
-            securable_full_name: ${var.catalog}.gold.fact_player_positions
-            permission: SELECT
-        - name: fact-kills
-          uc_securable:
-            securable_type: TABLE
-            securable_full_name: ${var.catalog}.gold.fact_kills
-            permission: SELECT
-        - name: fact-deaths
-          uc_securable:
-            securable_type: TABLE
-            securable_full_name: ${var.catalog}.gold.fact_deaths
-            permission: SELECT
-        - name: fact-damage
-          uc_securable:
-            securable_type: TABLE
-            securable_full_name: ${var.catalog}.gold.fact_damage
-            permission: SELECT
-
-        - name: dim-map-reference
-          uc_securable:
-            securable_type: TABLE
-            securable_full_name: ${var.catalog}.gold.dim_map_reference
-            permission: SELECT
-        - name: dim-map-level
-          uc_securable:
-            securable_type: TABLE
-            securable_full_name: ${var.catalog}.gold.dim_map_level
-            permission: SELECT
-        - name: dim-weapon-spec
-          uc_securable:
-            securable_type: TABLE
-            securable_full_name: ${var.catalog}.gold.dim_weapon_spec
-            permission: SELECT

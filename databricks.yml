@@ -1,7 +1,14 @@
-# Prod host is a placeholder. Replace ADB_WORKSPACE_URL before the first prod deploy.
+# Three targets, one catalog each:
+#   dev   personal deploys to the DEV workspace, catalog cs2_dev
+#   ci    the CI service principal deploys every pull request to the DEV workspace, catalog cs2_ci
+#   prod  the CD service principal deploys every merge to main, catalog cs2_prod
+# Pipeline and notebook code uses the schema names bronze, silver, and gold. mode: development
+# would prefix them, so dev and ci set presets instead. Catalogs keep the targets apart.
+# Prod values marked PROD_ come from the Terraform outputs. Replace them before the first prod deploy.
 
 bundle:
   name: cs2-tracker
+  databricks_cli_version: ">= 1.17.0"
 
 include:
   - databricks/resources/*.yml
@@ -10,6 +17,21 @@ variables:
   catalog:
     description: Unity Catalog for the bronze, silver, and gold schemas.
     default: cs2_dev
+  storage_account:
+    description: ADLS Gen2 account. Its bronze, silver, and gold containers are Unity Catalog external locations.
+    default: datalakecstracker
+  storage_folder:
+    description: Folder in each layer container that holds schema-managed storage.
+    default: uc
+  raw_volume_folder:
+    description: Folder in the bronze container behind the bronze.raw volume.
+    default: raw/batch_reference_data
+  readers_group:
+    description: Group that may read gold. Bronze and silver hold the raw SteamID64 and are not granted.
+    default: account users
+  deployer_sp:
+    description: Application ID of the service principal that deploys prod and runs its workloads.
+    default: ""
   eventhub_namespace:
     description: Azure Event Hubs namespace, without the servicebus.windows.net suffix.
     default: evhcs2tracker
@@ -30,20 +52,77 @@ variables:
 sync:
   exclude:
     - python/**
+    - tests/**
     - "**/__pycache__/**"
 
 targets:
   dev:
-    mode: development
     default: true
     workspace:
       host: https://adb-7405619783206256.16.azuredatabricks.net/
+    presets:
+      pipelines_development: true
+      trigger_pause_status: PAUSED
+      tags:
+        env: dev
+    # Spark SQL created these schemas and set this property. The API cannot remove it.
+    resources:
+      schemas:
+        bronze:
+          properties:
+            owner: root
+        silver:
+          properties:
+            owner: root
+        gold:
+          properties:
+            owner: root
+
+  # Integration tests. The catalog uses the metastore's default storage.
+  ci:
+    workspace:
+      host: https://adb-7405619783206256.16.azuredatabricks.net/
+    variables:
+      catalog: cs2_ci
+      storage_folder: ci/uc
+      raw_volume_folder: ci/raw/batch_reference_data
+      starting_offsets: latest
+    presets:
+      pipelines_development: true
+      trigger_pause_status: PAUSED
+      tags:
+        env: ci
+    resources:
+      catalogs:
+        cs2_ci:
+          name: cs2_ci
+          comment: Integration tests from pull requests. Deployed by CI only.
+      schemas:
+        bronze:
+          catalog_name: ${resources.catalogs.cs2_ci.name}
+        silver:
+          catalog_name: ${resources.catalogs.cs2_ci.name}
+        gold:
+          catalog_name: ${resources.catalogs.cs2_ci.name}
 
   prod:
     mode: production
+    workspace:
+      host: https://PROD_WORKSPACE.azuredatabricks.net
+      root_path: /Workspace/Users/${var.deployer_sp}/.bundle/${bundle.name}/${bundle.target}
+    run_as:
+      service_principal_name: ${var.deployer_sp}
     variables:
       catalog: cs2_prod
-    workspace:
-      host: https://ADB_WORKSPACE_URL.azuredatabricks.net
-      # Production mode cannot publish into a user's home directory.
-      root_path: /Shared/.bundle/${bundle.name}/${bundle.target}
+      storage_account: PROD_STORAGE_ACCOUNT
+      deployer_sp: PROD_DEPLOYER_SP_APP_ID
+      readers_group: cs2-readers
+    presets:
+      tags:
+        env: prod
+    # The deployer service principal owns every resource. People run and view, they do not edit.
+    permissions:
+      - level: CAN_RUN
+        group_name: cs2-operators
+      - level: CAN_VIEW
+        group_name: cs2-readers

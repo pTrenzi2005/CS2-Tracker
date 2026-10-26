@@ -1,11 +1,13 @@
 # Paths are relative to this file.
+# root_path is on sys.path during updates, so sources can import the transforms package.
 
 resources:
   pipelines:
     cs2_medallion:
       name: cs2_gsi_medallion
-      catalog: ${var.catalog}
-      schema: bronze
+      catalog: ${resources.schemas.bronze.catalog_name}
+      schema: ${resources.schemas.bronze.name}
+      root_path: ../pipelines
       serverless: true
       continuous: false
       channel: CURRENT

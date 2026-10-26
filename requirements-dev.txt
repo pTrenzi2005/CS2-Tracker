@@ -1,0 +1,4 @@
+# Tests and lint. Spark tests also need Java 17.
+pytest>=8
+ruff>=0.15
+pyspark>=4.0,<4.1

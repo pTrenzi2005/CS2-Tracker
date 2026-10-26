@@ -11,26 +11,21 @@ from databricks.sdk import WorkspaceClient
 from databricks.sdk.core import Config
 from PIL import Image
 
-# In the app, app.yaml resolves each table resource to its full name.
-# Locally, unset names fall back to CS2_CATALOG.
+# The bundle sets CS2_CATALOG per target. Locally it comes from the shell.
 CATALOG = os.getenv("CS2_CATALOG", "cs2_dev")
+GOLD = f"{CATALOG}.gold"
 
-
-def _table(env_name: str, schema_table: str) -> str:
-    return os.getenv(env_name) or f"{CATALOG}.{schema_table}"
-
-
-DIM_MATCH = _table("CS2_DIM_MATCH", "gold.dim_match")
-DIM_ROUND = _table("CS2_DIM_ROUND", "gold.dim_round")
-AGG_MATCH_SUMMARY = _table("CS2_AGG_MATCH_SUMMARY", "gold.agg_match_summary")
-FACT_ROUND_STATS = _table("CS2_FACT_ROUND_STATS", "gold.fact_round_stats")
-FACT_PLAYER_POSITIONS = _table("CS2_FACT_PLAYER_POSITIONS", "gold.fact_player_positions")
-FACT_KILLS = _table("CS2_FACT_KILLS", "gold.fact_kills")
-FACT_DEATHS = _table("CS2_FACT_DEATHS", "gold.fact_deaths")
-FACT_DAMAGE = _table("CS2_FACT_DAMAGE", "gold.fact_damage")
-DIM_MAP_REFERENCE = _table("CS2_DIM_MAP_REFERENCE", "gold.dim_map_reference")
-DIM_MAP_LEVEL = _table("CS2_DIM_MAP_LEVEL", "gold.dim_map_level")
-DIM_WEAPON_SPEC = _table("CS2_DIM_WEAPON_SPEC", "gold.dim_weapon_spec")
+DIM_MATCH = f"{GOLD}.dim_match"
+DIM_ROUND = f"{GOLD}.dim_round"
+AGG_MATCH_SUMMARY = f"{GOLD}.agg_match_summary"
+FACT_ROUND_STATS = f"{GOLD}.fact_round_stats"
+FACT_PLAYER_POSITIONS = f"{GOLD}.fact_player_positions"
+FACT_KILLS = f"{GOLD}.fact_kills"
+FACT_DEATHS = f"{GOLD}.fact_deaths"
+FACT_DAMAGE = f"{GOLD}.fact_damage"
+DIM_MAP_REFERENCE = f"{GOLD}.dim_map_reference"
+DIM_MAP_LEVEL = f"{GOLD}.dim_map_level"
+DIM_WEAPON_SPEC = f"{GOLD}.dim_weapon_spec"
 
 
 @st.cache_resource

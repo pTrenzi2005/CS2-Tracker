@@ -9,7 +9,8 @@ A local server receives Game State Integration packets from the game and sends n
 | [`python/`](python/) | Local GSI server | [python/README.md](python/README.md) |
 | [`databricks/`](databricks/) | Lakeflow pipeline and reference-data job | [databricks/README.md](databricks/README.md) |
 | [`dashboards/`](dashboards/) | Databricks App: run buttons and match dashboards | [dashboards/README.md](dashboards/README.md) |
-| [`databricks.yml`](databricks.yml) | Asset bundle. Dev catalog `cs2_dev`, prod catalog `cs2_prod` | |
+| [`databricks.yml`](databricks.yml) | Asset bundle. Targets `dev` (`cs2_dev`), `ci` (`cs2_ci`), `prod` (`cs2_prod`) | |
+| [`tests/`](tests/) | pytest: GSI client, pipeline and reference transforms on local Spark | |
 
 ## Data
 
@@ -33,7 +34,7 @@ Raw SteamID64 stays in silver. Gold stores `player_key` (`sha2` of the id) and a
 
 ## Run
 
-Create the catalog schemas and the `bronze.raw` volume once with [`databricks/01_architecture_setup.ipynb`](databricks/01_architecture_setup.ipynb).
+The bundle deploys everything below the catalog: schemas, the `bronze.raw` volume, grants, the pipeline, jobs, the warehouse, and the app. The catalog and the external locations for the `bronze`, `silver`, and `gold` containers must exist first.
 
 ```bash
 databricks bundle validate -t dev
@@ -43,6 +44,14 @@ databricks bundle run      cs2_reference_data -t dev
 databricks bundle run      cs2_tracker -t dev
 ```
 
-The last command starts the app and prints its URL. The app is granted `SELECT` on each gold table it reads, so those tables must exist when the app deploys. On a new catalog, if the first deploy stops at the app because a table is missing, run the pipeline and the reference job, then deploy again.
+The last command starts the app and prints its URL. The app reads gold through a schema grant, so one deploy works on an empty catalog. `databricks bundle plan -t dev` after a deploy should report no changes. Anything else is drift.
 
-The prod target host in [`databricks.yml`](databricks.yml) is a placeholder. Replace it before the first prod deploy. Start the local server from [`python/`](python/) after copying the GSI config into the game cfg directory.
+Prod values marked `PROD_` in [`databricks.yml`](databricks.yml) are placeholders until the prod infrastructure exists. Start the local server from [`python/`](python/) after copying the GSI config into the game cfg directory.
+
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest          # Spark tests skip when PySpark is not installed
+ruff check .
+```
