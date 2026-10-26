@@ -31,7 +31,7 @@ resource "azurerm_federated_identity_credential" "ci" {
   user_assigned_identity_id = azurerm_user_assigned_identity.ci.id
   issuer                    = "https://token.actions.githubusercontent.com"
   audience                  = ["api://AzureADTokenExchange"]
-  subject                   = "repo:${var.github_repository}:pull_request"
+  subject                   = "repo:${var.github_subject_repository}:pull_request"
 }
 
 # Creating a SQL warehouse needs allow_cluster_create. The workspace is serverless, so no classic cluster exists.

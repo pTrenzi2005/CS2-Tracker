@@ -10,10 +10,10 @@ variable "location" {
   default     = "swedencentral"
 }
 
-variable "github_repository" {
-  description = "owner/name of the repository whose workflows sign in to PROD."
+variable "github_subject_repository" {
+  description = "Repository part of the GitHub OIDC subject: owner@owner_id/name@repository_id. GitHub puts the IDs in, so a renamed or recreated repository cannot sign in."
   type        = string
-  default     = "pTrenzi2005/CS2-Tracker"
+  default     = "pTrenzi2005@202133242/CS2-Tracker@1368773264"
 }
 
 variable "resource_group_name" {

@@ -12,7 +12,7 @@ locals {
     deployer = {
       name = "id-cs2-prod-deployer"
       subjects = {
-        environment-prod = "repo:${var.github_repository}:environment:prod"
+        environment-prod = "repo:${var.github_subject_repository}:environment:prod"
       }
     }
   }

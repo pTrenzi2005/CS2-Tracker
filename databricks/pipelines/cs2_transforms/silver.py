@@ -209,21 +209,19 @@ def match_events(parsed: DataFrame) -> DataFrame:
     )
 
 
-BY_ROUND = Window.partitionBy("match_id", "round_number").orderBy("seq")
-
-
 def with_deltas(ticks: DataFrame) -> DataFrame:
+    by_round = Window.partitionBy("match_id", "round_number").orderBy("seq")
     return (
-        ticks.withColumn("prev_round_kills", F.lag("round_kills").over(BY_ROUND))
-        .withColumn("prev_round_killhs", F.lag("round_killhs").over(BY_ROUND))
-        .withColumn("prev_round_totaldmg", F.lag("round_totaldmg").over(BY_ROUND))
-        .withColumn("prev_health", F.lag("health").over(BY_ROUND))
-        .withColumn("prev_pos_x", F.lag("pos_x").over(BY_ROUND))
-        .withColumn("prev_pos_y", F.lag("pos_y").over(BY_ROUND))
-        .withColumn("prev_pos_z", F.lag("pos_z").over(BY_ROUND))
+        ticks.withColumn("prev_round_kills", F.lag("round_kills").over(by_round))
+        .withColumn("prev_round_killhs", F.lag("round_killhs").over(by_round))
+        .withColumn("prev_round_totaldmg", F.lag("round_totaldmg").over(by_round))
+        .withColumn("prev_health", F.lag("health").over(by_round))
+        .withColumn("prev_pos_x", F.lag("pos_x").over(by_round))
+        .withColumn("prev_pos_y", F.lag("pos_y").over(by_round))
+        .withColumn("prev_pos_z", F.lag("pos_z").over(by_round))
         # A match-level window would attach a last-second kill to the next round's spawn.
         # fact_round_stats adds those kills from round_end.
-        .withColumn("prev_match_kills", F.lag("match_kills").over(BY_ROUND))
+        .withColumn("prev_match_kills", F.lag("match_kills").over(by_round))
     )
 
 

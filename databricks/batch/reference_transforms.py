@@ -45,7 +45,10 @@ MAP_ENTRY = (
 )
 MANIFEST_SCHEMA = f"STRUCT<count: INT, maps: MAP<STRING, {MAP_ENTRY}>>"
 
-RADAR = F.col("entry.radar_info")
+
+# A function, not a constant: classic PySpark builds a Column in the JVM, and tests import before Spark starts.
+def radar_info() -> Column:
+    return F.col("entry.radar_info")
 
 
 def manifest_maps(map_icons: DataFrame) -> DataFrame:
@@ -117,9 +120,10 @@ def map_reference(
     icons = map_assets.filter(F.col("asset_type") == "icon").select(
         "map_name", F.col("volume_path").alias("icon_volume_path")
     )
+    radar = radar_info()
     section_count = (
-        F.when(RADAR["verticalsections"].isNull(), F.lit(0))
-        .otherwise(F.size(RADAR["verticalsections"]))
+        F.when(radar["verticalsections"].isNull(), F.lit(0))
+        .otherwise(F.size(radar["verticalsections"]))
     )
     return (
         maps.join(overview_df, "map_name", "left")
@@ -131,12 +135,12 @@ def map_reference(
             F.to_date("entry.first_seen").alias("first_seen_date"),
             F.col("entry.path").alias("icon_url"),
             "icon_volume_path",
-            RADAR.isNotNull().alias("has_radar"),
-            RADAR["pos_x"].alias("radar_pos_x"),
-            RADAR["pos_y"].alias("radar_pos_y"),
-            RADAR["scale"].alias("radar_scale"),
-            F.coalesce(RADAR["rotate"], F.lit(0.0)).alias("radar_rotate"),
-            F.coalesce(RADAR["zoom"], F.lit(1.0)).alias("radar_zoom"),
+            radar.isNotNull().alias("has_radar"),
+            radar["pos_x"].alias("radar_pos_x"),
+            radar["pos_y"].alias("radar_pos_y"),
+            radar["scale"].alias("radar_scale"),
+            F.coalesce(radar["rotate"], F.lit(0.0)).alias("radar_rotate"),
+            F.coalesce(radar["zoom"], F.lit(1.0)).alias("radar_zoom"),
             "radar_material",
             F.when(section_count > 0, section_count).otherwise(F.lit(1)).alias("level_count"),
             F.coalesce(F.col("entry.radar_paths"), F.array().cast("array<string>")).alias(
@@ -184,10 +188,11 @@ def radar_base_name(url: Column) -> Column:
 
 
 def map_level(maps: DataFrame, map_assets: DataFrame, ingest_run_id: str) -> DataFrame:
-    with_radar = maps.filter(RADAR.isNotNull()).select(
+    radar = radar_info()
+    with_radar = maps.filter(radar.isNotNull()).select(
         "map_name",
         F.coalesce(F.col("entry.radar_paths"), F.array().cast("array<string>")).alias("radar_urls"),
-        RADAR["verticalsections"].alias("sections"),
+        radar["verticalsections"].alias("sections"),
     )
     has_sections = F.col("sections").isNotNull() & (F.size(F.col("sections")) > 0)
 

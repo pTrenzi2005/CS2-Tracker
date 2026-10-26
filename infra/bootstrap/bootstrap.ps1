@@ -26,6 +26,8 @@ param(
     [string]$SubscriptionId = '3fc38270-4a82-4fa3-8e33-99c47ac04c9e',
     [string]$Location = 'swedencentral',
     [string]$GitHubRepository = 'pTrenzi2005/CS2-Tracker',
+    # GitHub's OIDC subject names the repository as owner@owner_id/name@repository_id.
+    [string]$GitHubSubjectRepository = 'pTrenzi2005@202133242/CS2-Tracker@1368773264',
     [string]$StateResourceGroup = 'rg-cs2-tfstate',
     [string]$StateStorageAccount = 'stcs2trackertfstate',
     [string]$StateContainer = 'tfstate',
@@ -119,8 +121,8 @@ Write-Host "  $StateStorageAccount/$StateContainer"
 Write-Host "Identity $TerraformIdentity"
 $identity = Invoke-AzJson identity create --name $TerraformIdentity --resource-group $StateResourceGroup --location $Location
 $credentials = [ordered]@{
-    'github-infra'        = "repo:${GitHubRepository}:environment:infra"
-    'github-pull-request' = "repo:${GitHubRepository}:pull_request"
+    'github-infra'        = "repo:${GitHubSubjectRepository}:environment:infra"
+    'github-pull-request' = "repo:${GitHubSubjectRepository}:pull_request"
 }
 foreach ($name in $credentials.Keys) {
     Invoke-Az identity federated-credential create --identity-name $TerraformIdentity --resource-group $StateResourceGroup `
