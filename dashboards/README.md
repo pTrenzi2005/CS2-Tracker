@@ -7,7 +7,6 @@ A Databricks App in Streamlit. The home page starts the reference batch and the 
 ```text
 dashboards/
   app.py              Entry point and page navigation
-  app.yaml            Start command and environment, resolved from app resources
   requirements.txt
   data.py             SQL warehouse queries, table names, radar images, map thumbnails
   runs.py             Start and read job runs
@@ -16,7 +15,7 @@ dashboards/
     analysis.py       Single page: radar overlays, match overview, momentum and economy, round pacing, round log
 ```
 
-The app is defined in [`../databricks/resources/cs2_tracker.app.yml`](../databricks/resources/cs2_tracker.app.yml) and deploys with the bundle. The GSI server is not part of it. It keeps running next to the game, see [`../python/`](../python/).
+The app is defined in [`../databricks/resources/cs2_tracker.app.yml`](../databricks/resources/cs2_tracker.app.yml) and deploys with the bundle. Its start command and environment are in the bundle's `config` block, not in an `app.yaml`, because the catalog differs per target. The GSI server is not part of it. It keeps running next to the game, see [`../python/`](../python/).
 
 # Buttons
 
@@ -31,14 +30,13 @@ Runs execute as the job owner. The app service principal only holds `CAN_MANAGE_
 
 # Data access
 
-Queries run on the `cs2-tracker-app` serverless warehouse. Each table the app reads is an app resource with `SELECT`, and `bronze.raw` is a resource with `READ_VOLUME`. Databricks grants `USE CATALOG` and `USE SCHEMA` with them. `app.yaml` maps every resource to an environment variable that holds the full table name, so the code never hardcodes the catalog.
+Queries run on the `cs2-tracker-app` serverless warehouse. The app's service principal has `USE SCHEMA` and `SELECT` on the `gold` schema from [`cs2_catalog.uc.yml`](../databricks/resources/cs2_catalog.uc.yml), so gold tables need not exist when the app deploys. `bronze.raw` is an app resource with `READ_VOLUME`, which also grants `USE CATALOG`.
 
-| Variable | Resource | Value |
+| Variable | Source | Value |
 | --- | --- | --- |
-| `DATABRICKS_WAREHOUSE_ID` | `sql-warehouse` | Warehouse id |
-| `CS2_REFERENCE_JOB_ID`, `CS2_ANALYSIS_JOB_ID` | `reference-job`, `analysis-job` | Job ids |
-| `CS2_RAW_VOLUME` | `raw-volume` | `/Volumes/<catalog>/bronze/raw` |
-| `CS2_DIM_MATCH` … `CS2_DIM_WEAPON_SPEC` | One per gold table | `<catalog>.gold.<table>` |
+| `CS2_CATALOG` | `${var.catalog}` | Catalog of the target. Table names are `<catalog>.gold.<table>` |
+| `DATABRICKS_WAREHOUSE_ID` | `sql-warehouse` resource | Warehouse id |
+| `CS2_REFERENCE_JOB_ID`, `CS2_ANALYSIS_JOB_ID` | `reference-job`, `analysis-job` resources | Job ids |
 
 Match ids, rounds, and sides are bound as named parameters, not formatted into SQL. Query results are cached for 10 minutes. A finished run clears the cache.
 
@@ -46,7 +44,7 @@ Radar images come from the volume copy that the reference job downloads (`gold.d
 
 # Run locally
 
-The same code runs on a laptop against the workspace. Authentication comes from a CLI profile. Table names fall back to `CS2_CATALOG`.
+The same code runs on a laptop against the workspace. Authentication comes from a CLI profile.
 
 ```powershell
 python -m venv .venv

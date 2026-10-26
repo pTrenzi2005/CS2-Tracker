@@ -1,7 +1,14 @@
-# Prod host is a placeholder. Replace ADB_WORKSPACE_URL before the first prod deploy.
+# Three targets, one catalog each:
+#   dev   personal deploys from your machine to the DEV workspace, catalog cs2_dev
+#   ci    .github/workflows/ci.yml deploys every pull request to the DEV workspace, catalog cs2_ci
+#   prod  .github/workflows/cd.yml deploys every merge to main to the PROD workspace, catalog cs2_prod
+# Pipeline and notebook code uses the schema names bronze, silver, and gold. mode: development
+# would prefix them, so dev and ci set presets instead. Catalogs keep the targets apart.
+# The prod host, storage_account, and deployer_sp come from terraform -chdir=infra/azure output bundle_prod.
 
 bundle:
   name: cs2-tracker
+  databricks_cli_version: ">= 1.17.0"
 
 include:
   - databricks/resources/*.yml
@@ -10,6 +17,21 @@ variables:
   catalog:
     description: Unity Catalog for the bronze, silver, and gold schemas.
     default: cs2_dev
+  storage_account:
+    description: ADLS Gen2 account. Its bronze, silver, and gold containers are Unity Catalog external locations.
+    default: datalakecstracker
+  storage_folder:
+    description: Folder in each layer container that holds schema-managed storage.
+    default: uc
+  raw_volume_folder:
+    description: Folder in the bronze container behind the bronze.raw volume.
+    default: raw/batch_reference_data
+  readers_group:
+    description: Group that may read gold. Bronze and silver hold the raw SteamID64 and are not granted.
+    default: account users
+  deployer_sp:
+    description: Application ID of the service principal that deploys prod and runs its workloads.
+    default: ""
   eventhub_namespace:
     description: Azure Event Hubs namespace, without the servicebus.windows.net suffix.
     default: evhcs2tracker
@@ -30,20 +52,113 @@ variables:
 sync:
   exclude:
     - python/**
+    - tests/**
     - "**/__pycache__/**"
 
 targets:
   dev:
-    mode: development
     default: true
     workspace:
       host: https://adb-7405619783206256.16.azuredatabricks.net/
+    presets:
+      pipelines_development: true
+      trigger_pause_status: PAUSED
+      tags:
+        env: dev
+    # Spark SQL created these schemas and set this property. The API cannot remove it.
+    resources:
+      schemas:
+        bronze:
+          properties:
+            owner: root
+        silver:
+          properties:
+            owner: root
+        gold:
+          properties:
+            owner: root
+
+  # Integration tests from pull requests. infra/dev creates the catalog and the CI identity.
+  # ci shares the DEV workspace with dev, and app names are unique per workspace, so names get a suffix.
+  # The app and the warehouse deploy stopped: the tests run the pipeline and the reference job, not the app.
+  ci:
+    workspace:
+      host: https://adb-7405619783206256.16.azuredatabricks.net/
+    variables:
+      catalog: cs2_ci
+      storage_folder: ci/uc
+      raw_volume_folder: ci/raw/batch_reference_data
+      starting_offsets: latest
+    presets:
+      pipelines_development: true
+      trigger_pause_status: PAUSED
+      tags:
+        env: ci
+    resources:
+      pipelines:
+        cs2_medallion:
+          name: cs2_gsi_medallion_ci
+      jobs:
+        cs2_reference_data:
+          name: cs2_reference_data_ingest_ci
+        cs2_medallion_refresh:
+          name: cs2_gsi_medallion_refresh_ci
+      sql_warehouses:
+        cs2_app_warehouse:
+          name: cs2-tracker-app-ci
+          lifecycle:
+            started: false
+      apps:
+        cs2_tracker:
+          name: cs2-tracker-ci
+          lifecycle:
+            started: false
 
   prod:
     mode: production
+    workspace:
+      host: https://adb-7405617734921642.2.azuredatabricks.net
+      root_path: /Workspace/Users/${var.deployer_sp}/.bundle/${bundle.name}/${bundle.target}
+    run_as:
+      service_principal_name: ${var.deployer_sp}
     variables:
       catalog: cs2_prod
-    workspace:
-      host: https://ADB_WORKSPACE_URL.azuredatabricks.net
-      # Production mode cannot publish into a user's home directory.
-      root_path: /Shared/.bundle/${bundle.name}/${bundle.target}
+      storage_account: stcs2trackerprod
+      deployer_sp: 2c03c152-9394-4361-b22e-6940151e12a7
+    presets:
+      tags:
+        env: prod
+    # The PROD workspace is serverless and has no classic clusters. Jobs use the cost-efficient serverless mode,
+    # which starts slower, and the app the smallest size.
+    # The permissions below replace a resource's whole access list on every deploy, so the warehouse and the jobs
+    # also list the app's service principal. Otherwise each deploy would revoke what the app's resources granted.
+    resources:
+      sql_warehouses:
+        cs2_app_warehouse:
+          permissions:
+            - level: CAN_USE
+              service_principal_name: ${resources.apps.cs2_tracker.service_principal_client_id}
+      jobs:
+        cs2_reference_data:
+          performance_target: STANDARD
+          permissions:
+            - level: CAN_MANAGE_RUN
+              service_principal_name: ${resources.apps.cs2_tracker.service_principal_client_id}
+        cs2_medallion_refresh:
+          performance_target: STANDARD
+          permissions:
+            - level: CAN_MANAGE_RUN
+              service_principal_name: ${resources.apps.cs2_tracker.service_principal_client_id}
+      apps:
+        cs2_tracker:
+          compute_size: MEDIUM
+    # The deployer service principal owns every resource. People run and view, they do not edit.
+    # cs2-operators and cs2-readers are workspace groups from infra/databricks. Unity Catalog cannot use them,
+    # so gold keeps readers_group = account users, which the catalog binding limits to the PROD workspace.
+    permissions:
+      - level: CAN_MANAGE
+        service_principal_name: ${var.deployer_sp}
+      - level: CAN_RUN
+        group_name: cs2-operators
+      - level: CAN_VIEW
+        group_name: cs2-readers

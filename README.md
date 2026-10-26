@@ -9,7 +9,10 @@ A local server receives Game State Integration packets from the game and sends n
 | [`python/`](python/) | Local GSI server | [python/README.md](python/README.md) |
 | [`databricks/`](databricks/) | Lakeflow pipeline and reference-data job | [databricks/README.md](databricks/README.md) |
 | [`dashboards/`](dashboards/) | Databricks App: run buttons and match dashboards | [dashboards/README.md](dashboards/README.md) |
-| [`databricks.yml`](databricks.yml) | Asset bundle. Dev catalog `cs2_dev`, prod catalog `cs2_prod` | |
+| [`databricks.yml`](databricks.yml) | Asset bundle. Targets `dev` (`cs2_dev`), `ci` (`cs2_ci`), `prod` (`cs2_prod`) | |
+| [`tests/`](tests/) | pytest: GSI client, pipeline and reference transforms on local Spark | |
+| [`infra/`](infra/) | Terraform: PROD workspace, storage, Unity Catalog, identities; the CI catalog in DEV | |
+| [`.github/workflows/`](.github/workflows/) | CI on pull requests, CD to PROD, Terraform, nightly drift check | [CI/CD](#cicd) |
 
 ## Data
 
@@ -33,7 +36,7 @@ Raw SteamID64 stays in silver. Gold stores `player_key` (`sha2` of the id) and a
 
 ## Run
 
-Create the catalog schemas and the `bronze.raw` volume once with [`databricks/01_architecture_setup.ipynb`](databricks/01_architecture_setup.ipynb).
+The bundle deploys everything below the catalog: schemas, the `bronze.raw` volume, grants, the pipeline, jobs, the warehouse, and the app. The catalog and the external locations for the `bronze`, `silver`, and `gold` containers must exist first.
 
 ```bash
 databricks bundle validate -t dev
@@ -43,6 +46,41 @@ databricks bundle run      cs2_reference_data -t dev
 databricks bundle run      cs2_tracker -t dev
 ```
 
-The last command starts the app and prints its URL. The app is granted `SELECT` on each gold table it reads, so those tables must exist when the app deploys. On a new catalog, if the first deploy stops at the app because a table is missing, run the pipeline and the reference job, then deploy again.
+The last command starts the app and prints its URL. The app reads gold through a schema grant, so one deploy works on an empty catalog. `databricks bundle plan -t dev` after a deploy should report no changes. Anything else is drift.
 
-The prod target host in [`databricks.yml`](databricks.yml) is a placeholder. Replace it before the first prod deploy. Start the local server from [`python/`](python/) after copying the GSI config into the game cfg directory.
+`dev` is for deploys from your machine. `ci` and `prod` are deployed by GitHub Actions. Start the local server from [`python/`](python/) after copying the GSI config into the game cfg directory.
+
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest          # Spark tests skip when PySpark is not installed
+ruff check .
+```
+
+## CI/CD
+
+GitHub Actions signs in to Azure through OIDC as user-assigned managed identities. The repository stores no secrets.
+
+| Workflow | Trigger | Identity | What it does |
+| --- | --- | --- | --- |
+| [`ci.yml`](.github/workflows/ci.yml) | Pull request to `main` | `id-cs2-ci` | Ruff and pytest, including Spark tests. Then validates `dev` and `ci`, deploys `ci` to the DEV workspace, checks the pipeline graph, and runs the reference job |
+| [`cd.yml`](.github/workflows/cd.yml) | Push to `main`, manual | `id-cs2-prod-deployer`, environment `prod` | Validates, plans, and deploys `prod`, checks the pipeline graph, deploys the app source, then stops the app |
+| [`infra.yml`](.github/workflows/infra.yml) | Changes in `infra/azure` or `infra/databricks` | `id-cs2-terraform` | Plans both stacks on a pull request. Applies `azure`, then `databricks`, on merge, in environment `infra` |
+| [`drift.yml`](.github/workflows/drift.yml) | Nightly, manual | deployer and `id-cs2-terraform` | Fails if the bundle or Terraform plan for PROD is not empty |
+
+Pull requests never load the `prod` target. Only the deployer can, because an app must be deployed by its `run_as` identity, and only jobs in the `prod` environment can sign in as it.
+
+A deploy that deletes or recreates a resource fails at the confirmation prompt. Read the plan in the run summary, then run CD manually with `approve_destructive`. The manual run can also load the reference data and refresh the pipeline. Deploys never load data.
+
+The app is stopped after each deploy because a running app is billed by the hour. Start it with `databricks apps start cs2-tracker -t prod`, or set `PROD_APP_KEEP_RUNNING` to `true` in the `prod` environment.
+
+| Variable | Scope | Value |
+| --- | --- | --- |
+| `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` | Repository | Tenant and subscription |
+| `TF_CLIENT_ID` | Repository | `terraform -chdir=infra/azure output -raw terraform_client_id` |
+| `DEV_CI_CLIENT_ID` | Repository | `terraform -chdir=infra/dev output -raw ci_client_id` |
+| `AZURE_CLIENT_ID` | Environment `prod` | `terraform -chdir=infra/azure output -raw deployer_client_id` |
+| `PROD_APP_KEEP_RUNNING` | Environment `prod`, optional | `true` keeps the app running after a deploy |
+
+[`infra/bootstrap/bootstrap.ps1`](infra/bootstrap/bootstrap.ps1) creates the state storage and the Terraform identity. `infra/dev` and the bootstrap run from your machine, because the Terraform identity has no access to DEV.

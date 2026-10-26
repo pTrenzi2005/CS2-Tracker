@@ -1,0 +1,99 @@
+# Merge to main: plan and deploy the bundle to PROD as the deployer identity, the only identity that changes PROD.
+# workflow_dispatch also loads data, which deploys never do, and allows a deploy that deletes or recreates
+# resources. Without that input such a deploy stops at the confirmation prompt and fails.
+name: CD
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - databricks.yml
+      - databricks/**
+      - dashboards/**
+      - .github/workflows/cd.yml
+  workflow_dispatch:
+    inputs:
+      run_reference_data:
+        description: Run the reference data job after the deploy (first deploy, game update)
+        type: boolean
+        default: false
+      refresh_pipeline:
+        description: Run one incremental update of the medallion pipeline after the deploy
+        type: boolean
+        default: false
+      approve_destructive:
+        description: Allow a deploy that deletes or recreates resources. Read the plan first
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: databricks-prod
+  cancel-in-progress: false
+
+env:
+  DATABRICKS_CLI_VERSION: 1.17.0
+  DATABRICKS_AUTH_TYPE: azure-cli
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  deploy:
+    name: Deploy to PROD
+    runs-on: ubuntu-24.04
+    environment: prod
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - uses: databricks/setup-cli@v1.22.1
+        with:
+          version: ${{ env.DATABRICKS_CLI_VERSION }}
+
+      - name: Validate
+        run: databricks bundle validate -t prod
+
+      - name: Plan
+        run: |
+          databricks bundle plan -t prod | tee plan.txt
+          {
+            echo '### Bundle plan: prod'
+            echo '```'
+            cat plan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Deploy
+        run: databricks bundle deploy -t prod ${{ inputs.approve_destructive && '--auto-approve' || '' }}
+
+      # Smoke test: builds the pipeline graph against PROD settings (catalog, secret scope) without processing data.
+      - name: Validate the pipeline graph
+        run: databricks bundle run cs2_medallion -t prod --validate-only
+
+      # Starts the app compute and deploys the new source.
+      - name: Deploy the app source
+        run: databricks bundle run cs2_tracker -t prod
+
+      # A running app is billed by the hour. Set the environment variable PROD_APP_KEEP_RUNNING to true to keep it
+      # up. Otherwise start it when needed: databricks apps start cs2-tracker -t prod
+      - name: Stop the app
+        if: vars.PROD_APP_KEEP_RUNNING != 'true'
+        run: databricks apps stop cs2-tracker -t prod
+
+      - name: Run the reference job
+        if: inputs.run_reference_data
+        run: databricks bundle run cs2_reference_data -t prod
+
+      - name: Refresh the pipeline
+        if: inputs.refresh_pipeline
+        run: databricks bundle run cs2_medallion_refresh -t prod

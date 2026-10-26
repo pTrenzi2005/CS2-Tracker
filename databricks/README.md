@@ -11,14 +11,16 @@ Two workloads share one Unity Catalog and one Asset Bundle. They do not share ta
 
 The pipeline turns live match telemetry into a star schema. The job loads static map and weapon data and keeps its own gold dimensions. Facts join those dimensions on `map_key` and `weapon_key`.
 
-Bundle definition: [`databricks.yml`](../databricks.yml). Dev publishes to catalog `cs2_dev`. Prod publishes to `cs2_prod`.
+Bundle definition: [`databricks.yml`](../databricks.yml). Dev publishes to catalog `cs2_dev`, CI to `cs2_ci`, prod to `cs2_prod`. Terraform creates `cs2_ci` ([`../infra/dev`](../infra/dev)) and `cs2_prod` ([`../infra/databricks`](../infra/databricks)). The `ci` target shares the DEV workspace with `dev`, so its pipeline, jobs, warehouse, and app names end in `_ci` or `-ci`.
 
 # Layout
 
 ```text
 databricks/
-  01_architecture_setup.ipynb   Unity Catalog schemas and the bronze volume
   pipelines/                     GSI pipeline (Lakeflow Python)
+    cs2_transforms/              Transformations: DataFrame in, DataFrame out. Imported through root_path
+      silver.py
+      gold.py
     bronze/bronze_gsi_events.py
     silver/silver_events_parsed.py
     silver/silver_ticks.py
@@ -27,6 +29,7 @@ databricks/
     gold/gold_dimensions.py
     gold/gold_facts.py
   batch/                         Reference-data notebooks
+    reference_transforms.py      Parsing and gold derivations, imported by the notebooks
     download_reference_data.py
     bronze_reference_data.py
     silver_reference_data.py
@@ -34,14 +37,15 @@ databricks/
     validate_reference_data.py
     telemetry_coverage.py        manual; not a job task
   resources/
+    cs2_catalog.uc.yml             schemas, the bronze.raw volume, gold grants
     cs2_medallion.pipeline.yml
     cs2_medallion_refresh.job.yml  app trigger for the pipeline
     cs2_reference_data.job.yml
-    cs2_tracker.app.yml            app, its jobs, warehouse, and Unity Catalog grants
+    cs2_tracker.app.yml            app, its config, jobs, warehouse, and volume
     cs2_tracker.sql_warehouse.yml
 ```
 
-`pipelines/` files are pipeline libraries. `batch/` files are Databricks notebooks.
+`pipelines/` files are pipeline libraries that declare tables and call `cs2_transforms`. `batch/` files are Databricks notebooks, except `reference_transforms.py`. Tests in [`../tests/`](../tests/) run both transformation modules on local Spark.
 
 # Medallion architecture
 
@@ -81,7 +85,9 @@ Gold on both sides uses the same surrogate keys, so a fact can join a reference 
 
 # Setup
 
-[`01_architecture_setup.ipynb`](01_architecture_setup.ipynb) creates schemas `bronze`, `silver`, `gold`, and `metastore`, plus the external volume `bronze.raw`. Run it once per catalog before the first deploy.
+[`resources/cs2_catalog.uc.yml`](resources/cs2_catalog.uc.yml) defines schemas `bronze`, `silver`, and `gold` with managed storage in the matching container, and the external volume `bronze.raw`. All four have `prevent_destroy`. The catalog and the container external locations are infrastructure and must exist before the first deploy. Gold grants `SELECT` to the app and to `readers_group`. Bronze and silver hold the raw SteamID64 and get no group grant.
+
+No target uses `mode: development`, because it prefixes schema names and the code uses fixed names. Catalogs keep targets apart.
 
 ```bash
 databricks bundle validate -t dev

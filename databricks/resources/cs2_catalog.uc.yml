@@ -1,0 +1,50 @@
+# Schemas and the raw volume. The catalog and the external locations are infrastructure, outside the bundle.
+# prevent_destroy: a config change that would drop a schema or the volume fails the deploy instead.
+# Grants on a securable replace its grants, so bronze and the volume have none here: the app's
+# volume resource grants USE CATALOG, USE SCHEMA, and READ VOLUME on them.
+
+resources:
+  schemas:
+    bronze:
+      name: bronze
+      catalog_name: ${var.catalog}
+      comment: Raw Event Hubs payloads and reference-data snapshots.
+      storage_root: abfss://bronze@${var.storage_account}.dfs.core.windows.net/${var.storage_folder}
+      lifecycle:
+        prevent_destroy: true
+
+    silver:
+      name: silver
+      catalog_name: ${var.catalog}
+      comment: Parsed and typed events and reference data. Holds the raw SteamID64.
+      storage_root: abfss://silver@${var.storage_account}.dfs.core.windows.net/${var.storage_folder}
+      lifecycle:
+        prevent_destroy: true
+
+    gold:
+      name: gold
+      catalog_name: ${var.catalog}
+      comment: Star schema for the dashboards. Players are hashed.
+      storage_root: abfss://gold@${var.storage_account}.dfs.core.windows.net/${var.storage_folder}
+      grants:
+        - principal: ${resources.apps.cs2_tracker.service_principal_client_id}
+          privileges:
+            - USE_SCHEMA
+            - SELECT
+        - principal: ${var.readers_group}
+          privileges:
+            - USE_SCHEMA
+            - SELECT
+      lifecycle:
+        prevent_destroy: true
+
+  volumes:
+    raw:
+      name: raw
+      catalog_name: ${resources.schemas.bronze.catalog_name}
+      schema_name: ${resources.schemas.bronze.name}
+      volume_type: EXTERNAL
+      storage_location: abfss://bronze@${var.storage_account}.dfs.core.windows.net/${var.raw_volume_folder}
+      comment: Downloaded reference files and their manifests.
+      lifecycle:
+        prevent_destroy: true
