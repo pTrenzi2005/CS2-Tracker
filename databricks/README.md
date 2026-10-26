@@ -11,7 +11,7 @@ Two workloads share one Unity Catalog and one Asset Bundle. They do not share ta
 
 The pipeline turns live match telemetry into a star schema. The job loads static map and weapon data and keeps its own gold dimensions. Facts join those dimensions on `map_key` and `weapon_key`.
 
-Bundle definition: [`databricks.yml`](../databricks.yml). Dev publishes to catalog `cs2_dev`, CI to `cs2_ci`, prod to `cs2_prod`.
+Bundle definition: [`databricks.yml`](../databricks.yml). Dev publishes to catalog `cs2_dev`, CI to `cs2_ci`, prod to `cs2_prod`. Terraform creates `cs2_ci` ([`../infra/dev`](../infra/dev)) and `cs2_prod` ([`../infra/databricks`](../infra/databricks)). The `ci` target shares the DEV workspace with `dev`, so its pipeline, jobs, warehouse, and app names end in `_ci` or `-ci`.
 
 # Layout
 

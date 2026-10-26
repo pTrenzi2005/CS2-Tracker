@@ -1,0 +1,102 @@
+# Pull requests: lint and tests, then the bundle on the DEV workspace through the ci target.
+# Prod is never loaded here. Only the deployer can load it (its app must be deployed by its run_as identity),
+# and only jobs in the prod environment can sign in as the deployer. cd.yml plans prod before deploying.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  DATABRICKS_CLI_VERSION: 1.17.0
+
+# An explicit bash adds pipefail, so a failing command before | tee fails the step.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: Lint and tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      # PySpark 4 needs Java 17.
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - run: pip install -r requirements-dev.txt
+
+      - run: ruff check --output-format=github .
+
+      - run: pytest -ra
+
+  integration:
+    name: Bundle on DEV (ci target)
+    needs: test
+    runs-on: ubuntu-24.04
+    # A pull request from a fork gets no OIDC token.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+      id-token: write
+    # One ci target and one cs2_ci catalog serve every pull request.
+    concurrency:
+      group: databricks-ci-target
+      cancel-in-progress: false
+    env:
+      DATABRICKS_AUTH_TYPE: azure-cli
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: azure/login@v3
+        with:
+          client-id: ${{ vars.DEV_CI_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - uses: databricks/setup-cli@v1.22.1
+        with:
+          version: ${{ env.DATABRICKS_CLI_VERSION }}
+
+      - name: Validate dev and ci
+        run: |
+          databricks bundle validate -t dev
+          databricks bundle validate -t ci
+
+      - name: Plan ci
+        run: |
+          databricks bundle plan -t ci | tee plan.txt
+          {
+            echo '### Bundle plan: ci'
+            echo '```'
+            cat plan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Deploy ci
+        run: databricks bundle deploy -t ci --auto-approve
+
+      # Builds the pipeline graph from the deployed sources without processing data.
+      - name: Validate the pipeline graph
+        run: databricks bundle run cs2_medallion -t ci --validate-only
+
+      # Download, bronze, silver, gold, and the validate task. Images are skipped to keep the run short.
+      - name: Run the reference job
+        run: databricks bundle run cs2_reference_data -t ci --params download_images=false

@@ -32,10 +32,6 @@ output "deployer_client_id" {
   value = azurerm_user_assigned_identity.github["deployer"].client_id
 }
 
-output "planner_client_id" {
-  value = azurerm_user_assigned_identity.github["planner"].client_id
-}
-
 output "tenant_id" {
   value = data.azurerm_user_assigned_identity.terraform.tenant_id
 }

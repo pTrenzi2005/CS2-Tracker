@@ -91,12 +91,6 @@ resource "databricks_grant" "catalog_deployer" {
   privileges = ["ALL_PRIVILEGES", "MANAGE"]
 }
 
-resource "databricks_grant" "catalog_planner" {
-  catalog    = databricks_catalog.prod.name
-  principal  = databricks_service_principal.planner.application_id
-  privileges = ["BROWSE", "USE_CATALOG", "USE_SCHEMA"]
-}
-
 # The binding limits account users to people in the PROD workspace. SELECT on gold comes from the bundle.
 resource "databricks_grant" "catalog_readers" {
   catalog    = databricks_catalog.prod.name

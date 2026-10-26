@@ -1,0 +1,103 @@
+# Nightly: PROD must match main. Any change in a bundle or Terraform plan means someone changed PROD by hand,
+# or main has changes that were never deployed. The run fails and the plan shows what differs.
+name: Drift
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  DATABRICKS_CLI_VERSION: 1.17.0
+  TERRAFORM_VERSION: 1.17.0
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  bundle:
+    name: Bundle drift (prod)
+    runs-on: ubuntu-24.04
+    # The deployer is the only identity that can load the prod target. The job only plans.
+    environment: prod
+    concurrency:
+      group: databricks-prod
+      cancel-in-progress: false
+    env:
+      DATABRICKS_AUTH_TYPE: azure-cli
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - uses: databricks/setup-cli@v1.22.1
+        with:
+          version: ${{ env.DATABRICKS_CLI_VERSION }}
+
+      - name: Plan
+        run: |
+          databricks bundle plan -t prod | tee plan.txt
+          {
+            echo '### Bundle plan: prod'
+            echo '```'
+            cat plan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if ! grep -Eq '^Plan: 0 to add, 0 to change, 0 to delete' plan.txt; then
+            echo "::error::PROD differs from main. See the plan above."
+            exit 1
+          fi
+
+  terraform:
+    name: Terraform drift (${{ matrix.stack }})
+    runs-on: ubuntu-24.04
+    environment: infra
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: [azure, databricks]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: azure/login@v3
+        with:
+          client-id: ${{ vars.TF_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Init
+        working-directory: infra/${{ matrix.stack }}
+        run: terraform init -input=false -backend-config=../backend.hcl
+
+      # -detailed-exitcode: 0 no changes, 1 error, 2 changes.
+      - name: Plan
+        working-directory: infra/${{ matrix.stack }}
+        run: |
+          set +e
+          terraform plan -input=false -no-color -detailed-exitcode -lock-timeout=10m > plan.txt
+          code=$?
+          set -e
+          {
+            echo "### Terraform plan: ${{ matrix.stack }}"
+            echo '```'
+            cat plan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$code" -eq 2 ]; then
+            echo "::error::infra/${{ matrix.stack }} differs from main. See the plan above."
+          fi
+          exit "$code"

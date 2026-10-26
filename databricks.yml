@@ -1,7 +1,7 @@
 # Three targets, one catalog each:
-#   dev   personal deploys to the DEV workspace, catalog cs2_dev
-#   ci    the CI service principal deploys every pull request to the DEV workspace, catalog cs2_ci
-#   prod  the CD service principal deploys every merge to main, catalog cs2_prod
+#   dev   personal deploys from your machine to the DEV workspace, catalog cs2_dev
+#   ci    .github/workflows/ci.yml deploys every pull request to the DEV workspace, catalog cs2_ci
+#   prod  .github/workflows/cd.yml deploys every merge to main to the PROD workspace, catalog cs2_prod
 # Pipeline and notebook code uses the schema names bronze, silver, and gold. mode: development
 # would prefix them, so dev and ci set presets instead. Catalogs keep the targets apart.
 # The prod host, storage_account, and deployer_sp come from terraform -chdir=infra/azure output bundle_prod.
@@ -78,7 +78,9 @@ targets:
           properties:
             owner: root
 
-  # Integration tests. The catalog uses the metastore's default storage.
+  # Integration tests from pull requests. infra/dev creates the catalog and the CI identity.
+  # ci shares the DEV workspace with dev, and app names are unique per workspace, so names get a suffix.
+  # The app and the warehouse deploy stopped: the tests run the pipeline and the reference job, not the app.
   ci:
     workspace:
       host: https://adb-7405619783206256.16.azuredatabricks.net/
@@ -93,17 +95,24 @@ targets:
       tags:
         env: ci
     resources:
-      catalogs:
-        cs2_ci:
-          name: cs2_ci
-          comment: Integration tests from pull requests. Deployed by CI only.
-      schemas:
-        bronze:
-          catalog_name: ${resources.catalogs.cs2_ci.name}
-        silver:
-          catalog_name: ${resources.catalogs.cs2_ci.name}
-        gold:
-          catalog_name: ${resources.catalogs.cs2_ci.name}
+      pipelines:
+        cs2_medallion:
+          name: cs2_gsi_medallion_ci
+      jobs:
+        cs2_reference_data:
+          name: cs2_reference_data_ingest_ci
+        cs2_medallion_refresh:
+          name: cs2_gsi_medallion_refresh_ci
+      sql_warehouses:
+        cs2_app_warehouse:
+          name: cs2-tracker-app-ci
+          lifecycle:
+            started: false
+      apps:
+        cs2_tracker:
+          name: cs2-tracker-ci
+          lifecycle:
+            started: false
 
   prod:
     mode: production

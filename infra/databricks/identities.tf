@@ -31,12 +31,6 @@ resource "databricks_service_principal" "deployer" {
   allow_cluster_create  = true
 }
 
-resource "databricks_service_principal" "planner" {
-  application_id   = local.azure.planner_client_id
-  display_name     = "id-cs2-prod-planner"
-  workspace_access = true
-}
-
 resource "databricks_group" "operators" {
   display_name          = "cs2-operators"
   workspace_access      = true
@@ -52,9 +46,4 @@ resource "databricks_group" "readers" {
 resource "databricks_group_member" "operator" {
   group_id  = databricks_group.operators.id
   member_id = data.databricks_user.operator.id
-}
-
-resource "databricks_group_member" "planner" {
-  group_id  = databricks_group.readers.id
-  member_id = databricks_service_principal.planner.id
 }

@@ -6,19 +6,13 @@ locals {
   github_issuer = "https://token.actions.githubusercontent.com"
 
   github_identities = {
-    # Deploys the bundle on merge to main, owns what the bundle creates, and runs the PROD workloads.
+    # Plans and deploys the bundle on merge to main, runs the nightly drift check, owns what the bundle creates,
+    # and runs the PROD workloads. Only jobs in the prod environment can sign in as it. Pull requests cannot:
+    # an app must be deployed by its run_as identity, so a separate read-only planner could not load the bundle.
     deployer = {
       name = "id-cs2-prod-deployer"
       subjects = {
         environment-prod = "repo:${var.github_repository}:environment:prod"
-      }
-    }
-    # Read only. Runs bundle plan on pull requests and the nightly drift check on main.
-    planner = {
-      name = "id-cs2-prod-planner"
-      subjects = {
-        pull-request = "repo:${var.github_repository}:pull_request"
-        branch-main  = "repo:${var.github_repository}:ref:refs/heads/main"
       }
     }
   }
