@@ -4,7 +4,7 @@
 #   prod  the CD service principal deploys every merge to main, catalog cs2_prod
 # Pipeline and notebook code uses the schema names bronze, silver, and gold. mode: development
 # would prefix them, so dev and ci set presets instead. Catalogs keep the targets apart.
-# Prod values marked PROD_ come from the Terraform outputs. Replace them before the first prod deploy.
+# The prod host, storage_account, and deployer_sp come from terraform -chdir=infra/azure output bundle_prod.
 
 bundle:
   name: cs2-tracker
@@ -108,20 +108,47 @@ targets:
   prod:
     mode: production
     workspace:
-      host: https://PROD_WORKSPACE.azuredatabricks.net
+      host: https://adb-7405617734921642.2.azuredatabricks.net
       root_path: /Workspace/Users/${var.deployer_sp}/.bundle/${bundle.name}/${bundle.target}
     run_as:
       service_principal_name: ${var.deployer_sp}
     variables:
       catalog: cs2_prod
-      storage_account: PROD_STORAGE_ACCOUNT
-      deployer_sp: PROD_DEPLOYER_SP_APP_ID
-      readers_group: cs2-readers
+      storage_account: stcs2trackerprod
+      deployer_sp: 2c03c152-9394-4361-b22e-6940151e12a7
     presets:
       tags:
         env: prod
+    # The PROD workspace is serverless and has no classic clusters. Jobs use the cost-efficient serverless mode,
+    # which starts slower, and the app the smallest size.
+    # The permissions below replace a resource's whole access list on every deploy, so the warehouse and the jobs
+    # also list the app's service principal. Otherwise each deploy would revoke what the app's resources granted.
+    resources:
+      sql_warehouses:
+        cs2_app_warehouse:
+          permissions:
+            - level: CAN_USE
+              service_principal_name: ${resources.apps.cs2_tracker.service_principal_client_id}
+      jobs:
+        cs2_reference_data:
+          performance_target: STANDARD
+          permissions:
+            - level: CAN_MANAGE_RUN
+              service_principal_name: ${resources.apps.cs2_tracker.service_principal_client_id}
+        cs2_medallion_refresh:
+          performance_target: STANDARD
+          permissions:
+            - level: CAN_MANAGE_RUN
+              service_principal_name: ${resources.apps.cs2_tracker.service_principal_client_id}
+      apps:
+        cs2_tracker:
+          compute_size: MEDIUM
     # The deployer service principal owns every resource. People run and view, they do not edit.
+    # cs2-operators and cs2-readers are workspace groups from infra/databricks. Unity Catalog cannot use them,
+    # so gold keeps readers_group = account users, which the catalog binding limits to the PROD workspace.
     permissions:
+      - level: CAN_MANAGE
+        service_principal_name: ${var.deployer_sp}
       - level: CAN_RUN
         group_name: cs2-operators
       - level: CAN_VIEW
