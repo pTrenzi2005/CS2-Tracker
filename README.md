@@ -2,6 +2,18 @@
 
 Counter-Strike 2 match telemetry and static game reference data, in one Unity Catalog.
 
+## Dashboards & Visualizations
+
+| Match Summary | Kill Map |
+| :---: | :---: |
+| <img src="assets/match_stats.png" alt="Match Statistics" width="100%"/> | <img src="assets/map_1.png" alt="Kills Map" width="100%"/> |
+| **Match Statistics**<br>Report summary: general player statistics, rounds, and key performance metrics. | **Kill Map**<br>Spatial visualization of kills on the minimap, including positions and direction. |
+| **Player Trajectory** | **Damage Heatmap** |
+| <img src="assets/map_2.png" alt="Player Trajectory" width="100%"/> | <img src="assets/map_3.png" alt="Damage Heatmap" width="100%"/> |
+| **Player Path / Trajectory**<br>Tracking a player's movement path on the map during a selected round. | **Damage Heatmap**<br>Spatial distribution of damage dealt during a match. |
+
+---
+
 A local server receives Game State Integration packets from the game and sends normalized events to Azure Event Hubs. A Databricks pipeline turns that stream into a star schema. A separate job loads map and weapon reference data. Facts join the reference dimensions on `map_key` and `weapon_key`. The two workloads do not share table ownership. A Databricks App starts both and shows the match dashboards.
 
 | Path | What it is | Detail |
