@@ -60,7 +60,7 @@ resource "databricks_grant" "deployer_location" {
 
 resource "databricks_catalog" "prod" {
   name           = var.catalog_name
-  comment        = "PROD medallion. Schemas and the raw volume come from the bundle, deployed by CI only."
+  comment        = "PROD medallion. Schemas and the raw volume come from the bundle, deployed by CD only."
   storage_root   = databricks_external_location.lake["catalog"].url
   owner          = local.uc_owner
   isolation_mode = "ISOLATED"

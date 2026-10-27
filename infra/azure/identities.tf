@@ -7,8 +7,8 @@ locals {
 
   github_identities = {
     # Plans and deploys the bundle on merge to main, runs the nightly drift check, owns what the bundle creates,
-    # and runs the PROD workloads. Only jobs in the prod environment can sign in as it. Pull requests cannot:
-    # an app must be deployed by its run_as identity, so a separate read-only planner could not load the bundle.
+    # and runs the PROD workloads. Only jobs in the prod environment can sign in as it. An app must be deployed
+    # by its run_as identity, so no other identity can load the prod target, not even to plan.
     deployer = {
       name = "id-cs2-prod-deployer"
       subjects = {

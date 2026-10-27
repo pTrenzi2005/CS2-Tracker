@@ -41,7 +41,7 @@ output "eventhub_listen_connection_string" {
   sensitive = true
 }
 
-# The values that replace the PROD_ placeholders in databricks.yml.
+# The values of the prod target in databricks.yml.
 output "bundle_prod" {
   value = {
     host            = "https://${azapi_resource.workspace.output.properties.workspaceUrl}"
