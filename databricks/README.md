@@ -102,6 +102,12 @@ Pipeline settings (catalog, Event Hubs namespace, secret scope, starting offset)
 
 Defined in [`resources/cs2_medallion.pipeline.yml`](resources/cs2_medallion.pipeline.yml). Serverless, triggered, channel `CURRENT`. Every table uses a fully qualified name, so one pipeline publishes into `bronze`, `silver`, and `gold`.
 
+### Pipeline Directed Acyclic Graph (DAG)
+
+End-to-end data flow and table dependencies across bronze, silver, and gold layers.
+
+<img src="../assets/dag.png" alt="Pipeline DAG" width="100%"/>
+
 ### 1. `pipelines/bronze/bronze_gsi_events.py`
 
 Reads the Event Hubs Kafka topic. The JSON body is stored as text.
@@ -184,6 +190,12 @@ A Databricks App can be granted a job, not a pipeline. [`resources/cs2_medallion
 # Reference data job
 
 Defined in [`resources/cs2_reference_data.job.yml`](resources/cs2_reference_data.job.yml). Five tasks, in order: `download`, `bronze`, `silver`, `gold`, `validate`. No schedule. Run it again when map or weapon data changes.
+
+### Task Execution Flow
+
+Sequential batch ingestion and processing workflow across the pipeline tasks.
+
+<img src="../assets/batch_ingestion.png" alt="Batch Ingestion Task Flow" width="100%"/>
 
 Download writes files to `/Volumes/<catalog>/bronze/raw/`:
 
